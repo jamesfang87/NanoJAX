@@ -1,6 +1,8 @@
+#include <compare>
 #include <cstddef>
 #include <functional>
 #include <tuple>
+#include <unordered_map>
 #include <vector>
 
 class Tape;
@@ -15,12 +17,34 @@ Var operator-(const Var &lhs, const Var &rhs);
 Var operator*(const Var &lhs, const Var &rhs);
 Var operator/(const Var &lhs, const Var &rhs);
 
+Var pow(const Var &base, double exponent);
+Var pow(double base, const Var &exponent);
+Var pow(const Var &base, const Var &exponent);
+Var log(const Var &x);
+Var exp(const Var &x);
+Var abs(const Var &x);
+Var sqrt(const Var &x);
+
+Var sin(const Var &x);
+Var cos(const Var &x);
+Var tan(const Var &x);
+Var csc(const Var &x);
+Var sec(const Var &x);
+Var cot(const Var &x);
+
+std::partial_ordering operator<=>(const Var &lhs, const Var &rhs);
+std::partial_ordering operator<=>(const Var &lhs, double rhs);
+std::partial_ordering operator<=>(double lhs, const Var &rhs);
+bool operator==(const Var &lhs, double rhs);
+bool operator==(double lhs, const Var &rhs);
+
 class Tape {
 public:
   std::vector<double> primals;
   std::vector<double> adjoints;
   std::vector<std::vector<Var>> parents;
   std::vector<std::function<void(int)>> backwards;
+  std::vector<double> constants;
 
 public:
   /// Args:
@@ -37,6 +61,18 @@ public:
     this->backwards.push_back(back);
 
     return Var{id};
+  }
+
+  Var add_constant(double value) {
+    static std::unordered_map<double, Var> cache;
+    auto it = cache.find(value);
+    if (it != cache.end()) {
+      return it->second;
+    }
+
+    auto node = add_node(value, {}, nullptr);
+    cache.emplace(value, node);
+    return node;
   }
 
   void backward(Var out) {
@@ -58,8 +94,6 @@ inline Tape tape;
 
 template <typename F> auto grad(F &&f) {
   return [f = std::forward<F>(f)](auto... ins) {
-    tape.reset_grads();
-
     // create the inputs (leaf nodes)
     auto vars = std::make_tuple(tape.add_node(ins, {}, nullptr)...);
 

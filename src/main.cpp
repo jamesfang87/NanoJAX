@@ -3,11 +3,20 @@
 #include <iostream>
 
 int main() {
-  auto f = [](const Var &x, const Var &y) { return x * x * x; };
+  auto f = [](const Var &x) { return pow(x, 3); };
+
+  auto relu = [](const Var &x) {
+    if (x > 0.0) {
+      return x;
+    } else {
+      return tape.add_constant(0.0);
+    }
+  };
 
   auto df = grad(f);
-  auto gradient = df(2.0, 1.0);
+  auto gradient1 = df(2.0);
+  auto gradient2 = df(-2.0);
 
-  std::cout << "df/dx at x=2.0, y=1.0: " << gradient[0] << std::endl;
-  std::cout << "df/dy at x=2.0, y=1.0: " << gradient[1] << std::endl;
+  std::cout << "df/dx at x=2.0: " << gradient1[0] << std::endl;
+  std::cout << "df/dy at x=-2.0: " << gradient2[0] << std::endl;
 }
