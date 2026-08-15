@@ -38,6 +38,22 @@ float to_float(const Real &r) {
 
 float to_float(const Scalar &s) { return to_float(value_of(s)); }
 
+// Streams whichever alternative r actually holds, so a float-valued Real
+// keeps float's default stream precision instead of being widened to
+// double first.
+std::ostream &operator<<(std::ostream &os, const Real &r) {
+  std::visit([&os](auto v) { os << v; }, r);
+  return os;
+}
+
+std::ostream &operator<<(std::ostream &os, const Scalar &s) {
+  return os << value_of(s);
+}
+
+std::ostream &operator<<(std::ostream &os, const Variable &v) {
+  return os << value_of(v);
+}
+
 Scalar operator+(const Scalar &lhs, const Scalar &rhs) {
   if (std::holds_alternative<Real>(lhs) && std::holds_alternative<Real>(rhs)) {
     return real_op(std::get<Real>(lhs), std::get<Real>(rhs),
