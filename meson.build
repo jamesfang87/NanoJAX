@@ -8,6 +8,6 @@ project(
 
 nanojax_exe = executable(
   'nanojax',
-  ['src/main.cpp', 'src/grad/var.cpp'],
+  ['src/main.cpp', 'src/ad/scalar.cpp'],
   include_directories: include_directories('.'),
 )
