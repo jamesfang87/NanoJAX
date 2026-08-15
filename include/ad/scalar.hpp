@@ -21,9 +21,6 @@ double to_double(const Scalar &s);
 float to_float(const Real &r);
 float to_float(const Scalar &s);
 
-// Streams the value held by r/s/v (the held float or double for Real, and
-// the traced primal for Scalar and Variable), rather than a variant's index
-// or an object's address.
 std::ostream &operator<<(std::ostream &os, const Real &r);
 std::ostream &operator<<(std::ostream &os, const Scalar &s);
 std::ostream &operator<<(std::ostream &os, const Variable &v);

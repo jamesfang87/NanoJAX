@@ -38,9 +38,6 @@ float to_float(const Real &r) {
 
 float to_float(const Scalar &s) { return to_float(value_of(s)); }
 
-// Streams whichever alternative r actually holds, so a float-valued Real
-// keeps float's default stream precision instead of being widened to
-// double first.
 std::ostream &operator<<(std::ostream &os, const Real &r) {
   std::visit([&os](auto v) { os << v; }, r);
   return os;
@@ -291,9 +288,6 @@ Variable cos(const Variable &x) {
   });
 }
 
-// tan'(x) = sec^2(x) = 1 + tan(x)^2, so the derivative reuses the primal
-// tan(x) that this node already stores as its own value, instead of a
-// second trip through sec or cos.
 Variable tan(const Variable &x) {
   Trace &tr = *x.trace;
   Scalar value = tan(tr.primals[x.id]);
@@ -305,7 +299,6 @@ Variable tan(const Variable &x) {
   });
 }
 
-// csc'(x) = -csc(x) cot(x); the csc(x) factor reuses this node's own value.
 Variable csc(const Variable &x) {
   Trace &tr = *x.trace;
   Scalar value = csc(tr.primals[x.id]);
@@ -317,7 +310,6 @@ Variable csc(const Variable &x) {
   });
 }
 
-// sec'(x) = sec(x) tan(x); the sec(x) factor reuses this node's own value.
 Variable sec(const Variable &x) {
   Trace &tr = *x.trace;
   Scalar value = sec(tr.primals[x.id]);
@@ -329,7 +321,6 @@ Variable sec(const Variable &x) {
   });
 }
 
-// cot'(x) = -csc^2(x) = -(1 + cot(x)^2), reusing this node's own value.
 Variable cot(const Variable &x) {
   Trace &tr = *x.trace;
   Scalar value = cot(tr.primals[x.id]);
@@ -341,9 +332,6 @@ Variable cot(const Variable &x) {
   });
 }
 
-// d(base^exponent)/dbase = exponent * base^(exponent - 1); the exponent
-// branch, d/dexponent = base^exponent * log(base), reuses this node's own
-// value in place of a second pow evaluation.
 Variable pow(const Variable &base, const Variable &exponent) {
   assert(base.trace == exponent.trace &&
          "pow: operands belong to different traces");
@@ -372,7 +360,6 @@ Variable log(const Variable &x) {
   });
 }
 
-// exp'(x) = exp(x), so the derivative is exactly this node's own value.
 Variable exp(const Variable &x) {
   Trace &tr = *x.trace;
   Scalar value = exp(tr.primals[x.id]);
@@ -383,9 +370,6 @@ Variable exp(const Variable &x) {
   });
 }
 
-// abs'(x) = sign(x): a locally constant function of the input, so it is
-// evaluated once as a plain double comparison rather than threaded through
-// the trace.
 Variable abs(const Variable &x) {
   Trace &tr = *x.trace;
   Scalar value = abs(tr.primals[x.id]);
@@ -397,8 +381,6 @@ Variable abs(const Variable &x) {
   });
 }
 
-// sqrt'(x) = 1 / (2 sqrt(x)), so the derivative reuses this node's own
-// value instead of recomputing the square root.
 Variable sqrt(const Variable &x) {
   Trace &tr = *x.trace;
   Scalar value = sqrt(tr.primals[x.id]);
