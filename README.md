@@ -20,6 +20,12 @@ Scalar g = df(3.0);
 
 Here, `grad(f)` constructs a new function `df` such that `df(x)` evaluates to $\frac{df}{dx}(x) = 3x^2$. Evaluating `to_double(g)` therefore yields $27.0$, since $3 \cdot 3.0^2 = 27.0$. Because `f` is built entirely from the overloaded `Scalar` operators, `grad` composes with any function assembled from these operators without modification, including the activation functions defined in `include/nn/layers/activation/activations.hpp`. Differentiating the ReLU activation, for instance, requires no more than `grad(relu)`.
 
+Like in JAX, `grad()` can also easily be nested to calculate higher order derivatives:
+```cpp
+auto ddf = grad(grad(f));
+Scalar g = df(3.0);
+```
+
 ## Differentiating a multi-argument function
 When `f` accepts more than one argument, `grad(f)` differentiates with respect to all of them at once and returns a `std::vector<Scalar>` of derivatives, one per input, in argument order, rather than a single `Scalar`. Separately, if `f` itself returns a `std::vector<Scalar>` rather than a single `Scalar`, the `argnums` parameter passed to `grad` selects which component of that output is treated as the scalar loss from which backpropagation proceeds.
 
