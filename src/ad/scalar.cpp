@@ -1,5 +1,5 @@
-#include "include/ad/scalar.hpp"
-#include "include/ad/trace.hpp"
+#include "ad/scalar.hpp"
+#include "ad/trace.hpp"
 
 #include <cassert>
 #include <cmath>
@@ -111,24 +111,21 @@ bool operator==(const Scalar &lhs, const Scalar &rhs) {
 
 Scalar sin(const Scalar &x) {
   if (std::holds_alternative<Real>(x)) {
-    return real_unary_op(std::get<Real>(x),
-                          [](auto v) { return std::sin(v); });
+    return real_unary_op(std::get<Real>(x), [](auto v) { return std::sin(v); });
   }
   return Scalar{sin(std::get<Variable>(x))};
 }
 
 Scalar cos(const Scalar &x) {
   if (std::holds_alternative<Real>(x)) {
-    return real_unary_op(std::get<Real>(x),
-                          [](auto v) { return std::cos(v); });
+    return real_unary_op(std::get<Real>(x), [](auto v) { return std::cos(v); });
   }
   return Scalar{cos(std::get<Variable>(x))};
 }
 
 Scalar tan(const Scalar &x) {
   if (std::holds_alternative<Real>(x)) {
-    return real_unary_op(std::get<Real>(x),
-                          [](auto v) { return std::tan(v); });
+    return real_unary_op(std::get<Real>(x), [](auto v) { return std::tan(v); });
   }
   return Scalar{tan(std::get<Variable>(x))};
 }
@@ -136,7 +133,7 @@ Scalar tan(const Scalar &x) {
 Scalar csc(const Scalar &x) {
   if (std::holds_alternative<Real>(x)) {
     return real_unary_op(std::get<Real>(x),
-                          [](auto v) { return 1 / std::sin(v); });
+                         [](auto v) { return 1 / std::sin(v); });
   }
   return Scalar{csc(std::get<Variable>(x))};
 }
@@ -144,7 +141,7 @@ Scalar csc(const Scalar &x) {
 Scalar sec(const Scalar &x) {
   if (std::holds_alternative<Real>(x)) {
     return real_unary_op(std::get<Real>(x),
-                          [](auto v) { return 1 / std::cos(v); });
+                         [](auto v) { return 1 / std::cos(v); });
   }
   return Scalar{sec(std::get<Variable>(x))};
 }
@@ -152,7 +149,7 @@ Scalar sec(const Scalar &x) {
 Scalar cot(const Scalar &x) {
   if (std::holds_alternative<Real>(x)) {
     return real_unary_op(std::get<Real>(x),
-                          [](auto v) { return 1 / std::tan(v); });
+                         [](auto v) { return 1 / std::tan(v); });
   }
   return Scalar{cot(std::get<Variable>(x))};
 }
@@ -170,24 +167,21 @@ Scalar pow(const Scalar &base, const Scalar &exponent) {
 
 Scalar log(const Scalar &x) {
   if (std::holds_alternative<Real>(x)) {
-    return real_unary_op(std::get<Real>(x),
-                          [](auto v) { return std::log(v); });
+    return real_unary_op(std::get<Real>(x), [](auto v) { return std::log(v); });
   }
   return Scalar{log(std::get<Variable>(x))};
 }
 
 Scalar exp(const Scalar &x) {
   if (std::holds_alternative<Real>(x)) {
-    return real_unary_op(std::get<Real>(x),
-                          [](auto v) { return std::exp(v); });
+    return real_unary_op(std::get<Real>(x), [](auto v) { return std::exp(v); });
   }
   return Scalar{exp(std::get<Variable>(x))};
 }
 
 Scalar abs(const Scalar &x) {
   if (std::holds_alternative<Real>(x)) {
-    return real_unary_op(std::get<Real>(x),
-                          [](auto v) { return std::abs(v); });
+    return real_unary_op(std::get<Real>(x), [](auto v) { return std::abs(v); });
   }
   return Scalar{abs(std::get<Variable>(x))};
 }
@@ -195,7 +189,7 @@ Scalar abs(const Scalar &x) {
 Scalar sqrt(const Scalar &x) {
   if (std::holds_alternative<Real>(x)) {
     return real_unary_op(std::get<Real>(x),
-                          [](auto v) { return std::sqrt(v); });
+                         [](auto v) { return std::sqrt(v); });
   }
   return Scalar{sqrt(std::get<Variable>(x))};
 }
@@ -318,8 +312,8 @@ Variable csc(const Variable &x) {
   return tr.add_variable(value, [x](size_t self_id) {
     Trace &tr = *x.trace;
     const Scalar &y = tr.primals[self_id];
-    tr.adjoints[x.id] = tr.adjoints[x.id] -
-                        tr.adjoints[self_id] * y * cot(tr.primals[x.id]);
+    tr.adjoints[x.id] =
+        tr.adjoints[x.id] - tr.adjoints[self_id] * y * cot(tr.primals[x.id]);
   });
 }
 
@@ -330,8 +324,8 @@ Variable sec(const Variable &x) {
   return tr.add_variable(value, [x](size_t self_id) {
     Trace &tr = *x.trace;
     const Scalar &y = tr.primals[self_id];
-    tr.adjoints[x.id] = tr.adjoints[x.id] +
-                        tr.adjoints[self_id] * y * tan(tr.primals[x.id]);
+    tr.adjoints[x.id] =
+        tr.adjoints[x.id] + tr.adjoints[self_id] * y * tan(tr.primals[x.id]);
   });
 }
 
@@ -360,9 +354,9 @@ Variable pow(const Variable &base, const Variable &exponent) {
     const Scalar &base_val = tr.primals[base.id];
     const Scalar &exp_val = tr.primals[exponent.id];
     const Scalar &y = tr.primals[self_id];
-    tr.adjoints[base.id] = tr.adjoints[base.id] +
-                           tr.adjoints[self_id] * exp_val *
-                               pow(base_val, exp_val - Scalar{1.0});
+    tr.adjoints[base.id] =
+        tr.adjoints[base.id] +
+        tr.adjoints[self_id] * exp_val * pow(base_val, exp_val - Scalar{1.0});
     tr.adjoints[exponent.id] =
         tr.adjoints[exponent.id] + tr.adjoints[self_id] * y * log(base_val);
   });
@@ -399,8 +393,7 @@ Variable abs(const Variable &x) {
     Trace &tr = *x.trace;
     double v = to_double(tr.primals[x.id]);
     double sign = v > 0.0 ? 1.0 : (v < 0.0 ? -1.0 : 0.0);
-    tr.adjoints[x.id] =
-        tr.adjoints[x.id] + tr.adjoints[self_id] * Scalar{sign};
+    tr.adjoints[x.id] = tr.adjoints[x.id] + tr.adjoints[self_id] * Scalar{sign};
   });
 }
 

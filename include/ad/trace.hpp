@@ -1,6 +1,6 @@
 #pragma once
 
-#include "include/ad/scalar.hpp"
+#include "ad/scalar.hpp"
 
 #include <cassert>
 #include <cstddef>

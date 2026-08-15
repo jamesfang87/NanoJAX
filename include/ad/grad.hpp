@@ -1,5 +1,5 @@
-#include "include/ad/scalar.hpp"
-#include "include/ad/trace.hpp"
+#include "ad/scalar.hpp"
+#include "ad/trace.hpp"
 
 #include <cstddef>
 #include <memory>
