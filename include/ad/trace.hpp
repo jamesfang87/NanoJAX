@@ -12,10 +12,18 @@
 
 class Trace {
 public:
-  std::vector<Scalar> primals;
-  std::vector<Scalar> adjoints;
+  Vector primals;
+  Vector adjoints;
   std::vector<std::function<void(size_t)>> backwards;
   std::unordered_map<Real, Variable> constant_cache;
+
+  // Pre-sizes primals, adjoints, and backwards to n entries
+  // This is done by grad to avoid expensive heap reallocations
+  void reserve(size_t n) {
+    primals.reserve(n);
+    adjoints.reserve(n);
+    backwards.reserve(n);
+  }
 
   Variable add_variable(Scalar value, std::function<void(size_t)> backwards) {
     auto id = primals.size();
@@ -61,8 +69,8 @@ inline void scan_trace(Trace *&result, const Variable &v) {
 }
 inline void scan_trace(Trace *&, const Real &) {}
 inline void scan_trace(Trace *&result, const Scalar &s) {
-  if (std::holds_alternative<Variable>(s)) {
-    scan_trace(result, std::get<Variable>(s));
+  if (const Variable *v = std::get_if<Variable>(&s)) {
+    scan_trace(result, *v);
   }
 }
 } // namespace detail
@@ -77,8 +85,8 @@ template <typename... Args> Trace &trace_of(const Args &...args) {
 // TODO: constants have no backprop, so maybe we could modify operator overloads
 // to use their value directly...
 inline Variable lift(const Scalar &s, Trace &t) {
-  if (std::holds_alternative<Variable>(s)) {
-    return std::get<Variable>(s);
+  if (const Variable *v = std::get_if<Variable>(&s)) {
+    return *v;
   }
   return t.add_const(std::get<Real>(s));
 }

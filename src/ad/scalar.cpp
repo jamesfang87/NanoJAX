@@ -3,23 +3,35 @@
 
 #include <cassert>
 #include <cmath>
+#include <cstddef>
 #include <variant>
 
 namespace {
 template <typename F> Real real_op(const Real &lhs, const Real &rhs, F &&op) {
-  return std::visit([&](auto a, auto b) -> Real { return op(a, b); }, lhs, rhs);
+  if (const double *a = std::get_if<double>(&lhs)) {
+    if (const double *b = std::get_if<double>(&rhs)) {
+      return Real{op(*a, *b)};
+    }
+    return Real{op(*a, *std::get_if<float>(&rhs))};
+  }
+  const float *a = std::get_if<float>(&lhs);
+  if (const double *b = std::get_if<double>(&rhs)) {
+    return Real{op(*a, *b)};
+  }
+  return Real{op(*a, *std::get_if<float>(&rhs))};
 }
 
-// Single-operand counterpart of real_op, used by the unary Real functions
-// below (sin, cos, sqrt, ...).
 template <typename F> Real real_unary_op(const Real &x, F &&op) {
-  return std::visit([&](auto v) -> Real { return op(v); }, x);
+  if (const double *v = std::get_if<double>(&x)) {
+    return Real{op(*v)};
+  }
+  return Real{op(*std::get_if<float>(&x))};
 }
 } // namespace
 
 Real value_of(const Scalar &s) {
-  if (std::holds_alternative<Real>(s)) {
-    return std::get<Real>(s);
+  if (const Real *r = std::get_if<Real>(&s)) {
+    return *r;
   }
   return value_of(std::get<Variable>(s));
 }
@@ -27,20 +39,28 @@ Real value_of(const Scalar &s) {
 Real value_of(const Variable &x) { return value_of(x.trace->primals[x.id]); }
 
 double to_double(const Real &r) {
-  return std::visit([](auto v) { return static_cast<double>(v); }, r);
+  if (const double *d = std::get_if<double>(&r)) {
+    return *d;
+  }
+  return static_cast<double>(*std::get_if<float>(&r));
 }
 
 double to_double(const Scalar &s) { return to_double(value_of(s)); }
 
 float to_float(const Real &r) {
-  return std::visit([](auto v) { return static_cast<float>(v); }, r);
+  if (const float *f = std::get_if<float>(&r)) {
+    return *f;
+  }
+  return static_cast<float>(*std::get_if<double>(&r));
 }
 
 float to_float(const Scalar &s) { return to_float(value_of(s)); }
 
 std::ostream &operator<<(std::ostream &os, const Real &r) {
-  std::visit([&os](auto v) { os << v; }, r);
-  return os;
+  if (const double *d = std::get_if<double>(&r)) {
+    return os << *d;
+  }
+  return os << *std::get_if<float>(&r);
 }
 
 std::ostream &operator<<(std::ostream &os, const Scalar &s) {
@@ -52,9 +72,10 @@ std::ostream &operator<<(std::ostream &os, const Variable &v) {
 }
 
 Scalar operator+(const Scalar &lhs, const Scalar &rhs) {
-  if (std::holds_alternative<Real>(lhs) && std::holds_alternative<Real>(rhs)) {
-    return real_op(std::get<Real>(lhs), std::get<Real>(rhs),
-                   [](auto a, auto b) { return a + b; });
+  if (const Real *l = std::get_if<Real>(&lhs)) {
+    if (const Real *r = std::get_if<Real>(&rhs)) {
+      return real_op(*l, *r, [](auto a, auto b) { return a + b; });
+    }
   }
 
   Trace &tr = trace_of(lhs, rhs);
@@ -62,9 +83,10 @@ Scalar operator+(const Scalar &lhs, const Scalar &rhs) {
 }
 
 Scalar operator-(const Scalar &lhs, const Scalar &rhs) {
-  if (std::holds_alternative<Real>(lhs) && std::holds_alternative<Real>(rhs)) {
-    return real_op(std::get<Real>(lhs), std::get<Real>(rhs),
-                   [](auto a, auto b) { return a - b; });
+  if (const Real *l = std::get_if<Real>(&lhs)) {
+    if (const Real *r = std::get_if<Real>(&rhs)) {
+      return real_op(*l, *r, [](auto a, auto b) { return a - b; });
+    }
   }
 
   Trace &tr = trace_of(lhs, rhs);
@@ -72,9 +94,10 @@ Scalar operator-(const Scalar &lhs, const Scalar &rhs) {
 }
 
 Scalar operator*(const Scalar &lhs, const Scalar &rhs) {
-  if (std::holds_alternative<Real>(lhs) && std::holds_alternative<Real>(rhs)) {
-    return real_op(std::get<Real>(lhs), std::get<Real>(rhs),
-                   [](auto a, auto b) { return a * b; });
+  if (const Real *l = std::get_if<Real>(&lhs)) {
+    if (const Real *r = std::get_if<Real>(&rhs)) {
+      return real_op(*l, *r, [](auto a, auto b) { return a * b; });
+    }
   }
 
   Trace &tr = trace_of(lhs, rhs);
@@ -82,9 +105,10 @@ Scalar operator*(const Scalar &lhs, const Scalar &rhs) {
 }
 
 Scalar operator/(const Scalar &lhs, const Scalar &rhs) {
-  if (std::holds_alternative<Real>(lhs) && std::holds_alternative<Real>(rhs)) {
-    return real_op(std::get<Real>(lhs), std::get<Real>(rhs),
-                   [](auto a, auto b) { return a / b; });
+  if (const Real *l = std::get_if<Real>(&lhs)) {
+    if (const Real *r = std::get_if<Real>(&rhs)) {
+      return real_op(*l, *r, [](auto a, auto b) { return a / b; });
+    }
   }
 
   Trace &tr = trace_of(lhs, rhs);
@@ -92,10 +116,30 @@ Scalar operator/(const Scalar &lhs, const Scalar &rhs) {
 }
 
 Scalar operator-(const Scalar &rhs) {
-  if (std::holds_alternative<Real>(rhs)) {
-    return real_unary_op(std::get<Real>(rhs), [](auto v) { return -v; });
+  if (const Real *r = std::get_if<Real>(&rhs)) {
+    return real_unary_op(*r, [](auto v) { return -v; });
   }
   return Scalar{-std::get<Variable>(rhs)};
+}
+
+Scalar &operator+=(Scalar &lhs, const Scalar &rhs) {
+  lhs = lhs + rhs;
+  return lhs;
+}
+
+Scalar &operator-=(Scalar &lhs, const Scalar &rhs) {
+  lhs = lhs - rhs;
+  return lhs;
+}
+
+Scalar &operator*=(Scalar &lhs, const Scalar &rhs) {
+  lhs = lhs * rhs;
+  return lhs;
+}
+
+Scalar &operator/=(Scalar &lhs, const Scalar &rhs) {
+  lhs = lhs / rhs;
+  return lhs;
 }
 
 std::partial_ordering operator<=>(const Scalar &lhs, const Scalar &rhs) {
@@ -107,55 +151,52 @@ bool operator==(const Scalar &lhs, const Scalar &rhs) {
 }
 
 Scalar sin(const Scalar &x) {
-  if (std::holds_alternative<Real>(x)) {
-    return real_unary_op(std::get<Real>(x), [](auto v) { return std::sin(v); });
+  if (const Real *r = std::get_if<Real>(&x)) {
+    return real_unary_op(*r, [](auto v) { return std::sin(v); });
   }
   return Scalar{sin(std::get<Variable>(x))};
 }
 
 Scalar cos(const Scalar &x) {
-  if (std::holds_alternative<Real>(x)) {
-    return real_unary_op(std::get<Real>(x), [](auto v) { return std::cos(v); });
+  if (const Real *r = std::get_if<Real>(&x)) {
+    return real_unary_op(*r, [](auto v) { return std::cos(v); });
   }
   return Scalar{cos(std::get<Variable>(x))};
 }
 
 Scalar tan(const Scalar &x) {
-  if (std::holds_alternative<Real>(x)) {
-    return real_unary_op(std::get<Real>(x), [](auto v) { return std::tan(v); });
+  if (const Real *r = std::get_if<Real>(&x)) {
+    return real_unary_op(*r, [](auto v) { return std::tan(v); });
   }
   return Scalar{tan(std::get<Variable>(x))};
 }
 
 Scalar csc(const Scalar &x) {
-  if (std::holds_alternative<Real>(x)) {
-    return real_unary_op(std::get<Real>(x),
-                         [](auto v) { return 1 / std::sin(v); });
+  if (const Real *r = std::get_if<Real>(&x)) {
+    return real_unary_op(*r, [](auto v) { return 1 / std::sin(v); });
   }
   return Scalar{csc(std::get<Variable>(x))};
 }
 
 Scalar sec(const Scalar &x) {
-  if (std::holds_alternative<Real>(x)) {
-    return real_unary_op(std::get<Real>(x),
-                         [](auto v) { return 1 / std::cos(v); });
+  if (const Real *r = std::get_if<Real>(&x)) {
+    return real_unary_op(*r, [](auto v) { return 1 / std::cos(v); });
   }
   return Scalar{sec(std::get<Variable>(x))};
 }
 
 Scalar cot(const Scalar &x) {
-  if (std::holds_alternative<Real>(x)) {
-    return real_unary_op(std::get<Real>(x),
-                         [](auto v) { return 1 / std::tan(v); });
+  if (const Real *r = std::get_if<Real>(&x)) {
+    return real_unary_op(*r, [](auto v) { return 1 / std::tan(v); });
   }
   return Scalar{cot(std::get<Variable>(x))};
 }
 
 Scalar pow(const Scalar &base, const Scalar &exponent) {
-  if (std::holds_alternative<Real>(base) &&
-      std::holds_alternative<Real>(exponent)) {
-    return real_op(std::get<Real>(base), std::get<Real>(exponent),
-                   [](auto b, auto e) { return std::pow(b, e); });
+  if (const Real *b = std::get_if<Real>(&base)) {
+    if (const Real *e = std::get_if<Real>(&exponent)) {
+      return real_op(*b, *e, [](auto bb, auto ee) { return std::pow(bb, ee); });
+    }
   }
 
   Trace &tr = trace_of(base, exponent);
@@ -163,40 +204,32 @@ Scalar pow(const Scalar &base, const Scalar &exponent) {
 }
 
 Scalar log(const Scalar &x) {
-  if (std::holds_alternative<Real>(x)) {
-    return real_unary_op(std::get<Real>(x), [](auto v) { return std::log(v); });
+  if (const Real *r = std::get_if<Real>(&x)) {
+    return real_unary_op(*r, [](auto v) { return std::log(v); });
   }
   return Scalar{log(std::get<Variable>(x))};
 }
 
 Scalar exp(const Scalar &x) {
-  if (std::holds_alternative<Real>(x)) {
-    return real_unary_op(std::get<Real>(x), [](auto v) { return std::exp(v); });
+  if (const Real *r = std::get_if<Real>(&x)) {
+    return real_unary_op(*r, [](auto v) { return std::exp(v); });
   }
   return Scalar{exp(std::get<Variable>(x))};
 }
 
 Scalar abs(const Scalar &x) {
-  if (std::holds_alternative<Real>(x)) {
-    return real_unary_op(std::get<Real>(x), [](auto v) { return std::abs(v); });
+  if (const Real *r = std::get_if<Real>(&x)) {
+    return real_unary_op(*r, [](auto v) { return std::abs(v); });
   }
   return Scalar{abs(std::get<Variable>(x))};
 }
 
 Scalar sqrt(const Scalar &x) {
-  if (std::holds_alternative<Real>(x)) {
-    return real_unary_op(std::get<Real>(x),
-                         [](auto v) { return std::sqrt(v); });
+  if (const Real *r = std::get_if<Real>(&x)) {
+    return real_unary_op(*r, [](auto v) { return std::sqrt(v); });
   }
   return Scalar{sqrt(std::get<Variable>(x))};
 }
-
-// Each Variable operator below builds the result node's primal from the
-// operands' stored primals (rather than raw float/double), and each
-// backward closure accumulates into the operands' adjoints via the Scalar
-// operators above (rather than raw arithmetic). Both primals and adjoints
-// are Scalar, not Real, precisely so that a nested trace (grad(grad(f)))
-// can carry an outer Variable through this same code path.
 
 Variable operator+(const Variable &lhs, const Variable &rhs) {
   assert(lhs.trace == rhs.trace &&
@@ -258,6 +291,26 @@ Variable operator-(const Variable &rhs) {
     Trace &tr = *rhs.trace;
     tr.adjoints[rhs.id] = tr.adjoints[rhs.id] - tr.adjoints[self_id];
   });
+}
+
+Variable &operator+=(Variable &lhs, const Variable &rhs) {
+  lhs = lhs + rhs;
+  return lhs;
+}
+
+Variable &operator-=(Variable &lhs, const Variable &rhs) {
+  lhs = lhs - rhs;
+  return lhs;
+}
+
+Variable &operator*=(Variable &lhs, const Variable &rhs) {
+  lhs = lhs * rhs;
+  return lhs;
+}
+
+Variable &operator/=(Variable &lhs, const Variable &rhs) {
+  lhs = lhs / rhs;
+  return lhs;
 }
 
 std::partial_ordering operator<=>(const Variable &lhs, const Variable &rhs) {
@@ -390,4 +443,79 @@ Variable sqrt(const Variable &x) {
     tr.adjoints[x.id] =
         tr.adjoints[x.id] + tr.adjoints[self_id] / (Scalar{2.0} * y);
   });
+}
+
+Vector operator+(const Vector &lhs, const Vector &rhs) {
+  assert(lhs.size() == rhs.size() &&
+         "Vector addition expects dimension of lhs and rhs to match");
+
+  Vector out;
+  out.reserve(lhs.size());
+  for (size_t i = 0; i < lhs.size(); ++i) {
+    out.push_back(lhs[i] + rhs[i]);
+  }
+  return out;
+}
+
+Vector operator-(const Vector &lhs, const Vector &rhs) {
+  assert(lhs.size() == rhs.size() &&
+         "Vector subtraction expects dimension of lhs and rhs to match");
+
+  Vector out;
+  out.reserve(lhs.size());
+  for (size_t i = 0; i < lhs.size(); ++i) {
+    out.push_back(lhs[i] - rhs[i]);
+  }
+  return out;
+}
+
+Scalar dot(const Vector &lhs, const Vector &rhs) {
+  assert(lhs.size() == rhs.size() &&
+         "Dot product expects dimension of lhs and rhs to match");
+
+  Scalar out{0.0};
+  for (size_t i = 0; i < lhs.size(); ++i) {
+    out += lhs[i] * rhs[i];
+  }
+  return out;
+}
+
+Matrix operator*(const Matrix &lhs, const Matrix &rhs) {
+  assert(lhs.cols == rhs.rows &&
+         "Matrix operator*: lhs.cols must equal rhs.rows");
+  Matrix result(lhs.rows, rhs.cols);
+  for (size_t i = 0; i < lhs.rows; ++i) {
+    for (size_t k = 0; k < lhs.cols; ++k) {
+      const Scalar &a_ik = lhs(i, k);
+      for (size_t j = 0; j < rhs.cols; ++j) {
+        result(i, j) += a_ik * rhs(k, j);
+      }
+    }
+  }
+  return result;
+}
+
+Vector operator*(const Matrix &lhs, const Vector &rhs) {
+  assert(lhs.cols == rhs.size() &&
+         "Matrix-vector product: lhs.cols must equal rhs.size()");
+  Vector result(lhs.rows);
+  for (size_t i = 0; i < lhs.rows; ++i) {
+    for (size_t j = 0; j < lhs.cols; ++j) {
+      result[i] += lhs(i, j) * rhs[j];
+    }
+  }
+  return result;
+}
+
+Vector operator*(const Vector &lhs, const Matrix &rhs) {
+  assert(rhs.rows == lhs.size() &&
+         "Vector-matrix product: lhs.size() must equal rhs.rows");
+  Vector result(rhs.cols);
+  for (size_t j = 0; j < rhs.rows; ++j) {
+    const Scalar &x_j = lhs[j];
+    for (size_t i = 0; i < rhs.cols; ++i) {
+      result[i] += x_j * rhs(j, i);
+    }
+  }
+  return result;
 }

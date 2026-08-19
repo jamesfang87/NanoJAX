@@ -39,7 +39,7 @@ int main() {
   // regardless of argnums.
   {
     auto g = grad(f);
-    std::vector<Scalar> gv = g(x0, y0);
+    Vector gv = g(x0, y0);
     expect_near("df/dx", to_double(gv[0]), 2 * x0 * y0);
     expect_near("df/dy", to_double(gv[1]), x0 * x0 + 3 * y0 * y0);
   }
@@ -48,7 +48,7 @@ int main() {
   // again, then (arity still 2) returns its full gradient: Hessian row 0.
   {
     auto row0 = grad(grad(f), 0);
-    std::vector<Scalar> h0 = row0(x0, y0);
+    Vector h0 = row0(x0, y0);
     expect_near("d2f/dx2  (row0[0])", to_double(h0[0]), 2 * y0);
     expect_near("d2f/dxdy (row0[1])", to_double(h0[1]), 2 * x0);
   }
@@ -56,7 +56,7 @@ int main() {
   // grad(grad(f), argnums=1) selects df/dy instead: Hessian row 1.
   {
     auto row1 = grad(grad(f), 1);
-    std::vector<Scalar> h1 = row1(x0, y0);
+    Vector h1 = row1(x0, y0);
     expect_near("d2f/dydx (row1[0])", to_double(h1[0]), 2 * x0);
     expect_near("d2f/dy2  (row1[1])", to_double(h1[1]), 6 * y0);
   }

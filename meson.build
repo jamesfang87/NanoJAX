@@ -3,12 +3,12 @@ project(
   'cpp',
   version: '0.0.1',
   meson_version:'>=1.0.0',
-  default_options: ['cpp_std=c++23', 'buildtype=debug']
+  default_options: ['cpp_std=c++23', 'buildtype=debug', 'b_lto=true']
 )
 
 nanojax_incdir = include_directories('include')
 
-nanojax_lib = shared_library(
+nanojax_lib = static_library(
   'nanojax',
   ['src/ad/scalar.cpp'],
   include_directories: nanojax_incdir,
@@ -21,9 +21,10 @@ nanojax_exe = executable(
   link_with: nanojax_lib,
 )
 
-# Every test executable links against the shared library rather than
-# recompiling src/ad/scalar.cpp directly.
-foreach name : ['test_scalar', 'test_variable', 'test_grad']
+foreach name : [
+  'test_scalar', 'test_variable', 'test_grad', 'test_gradcheck', 'test_loss',
+  'test_vecmat', 'test_mlp'
+]
   test(
     name,
     executable(

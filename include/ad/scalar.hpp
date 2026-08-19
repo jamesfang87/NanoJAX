@@ -1,9 +1,12 @@
 #pragma once
 
+#include <compare>
 #include <cstddef>
 #include <format>
 #include <ostream>
+#include <utility>
 #include <variant>
+#include <vector>
 
 using Real = std::variant<float, double>;
 using Scalar = std::variant<Real, struct Variable>;
@@ -11,6 +14,28 @@ using Scalar = std::variant<Real, struct Variable>;
 struct Variable {
   class Trace *trace;
   size_t id;
+};
+
+struct Vector : std::vector<Scalar> {
+  Vector() = default;
+  Vector(std::initializer_list<Scalar> init) : std::vector<Scalar>(init) {}
+  Vector(size_t n, Scalar fill = Scalar{0.0})
+      : std::vector<Scalar>(n, std::move(fill)) {}
+};
+
+struct Matrix {
+  Vector data;
+  size_t rows = 0;
+  size_t cols = 0;
+
+  Matrix() = default;
+  Matrix(size_t rows, size_t cols, Scalar fill = Scalar{0.0})
+      : data(rows * cols, std::move(fill)), rows(rows), cols(cols) {}
+
+  Scalar &operator()(size_t i, size_t j) { return data[i * cols + j]; }
+  const Scalar &operator()(size_t i, size_t j) const {
+    return data[i * cols + j];
+  }
 };
 
 Real value_of(const Scalar &s);
@@ -31,11 +56,10 @@ Scalar operator-(const Scalar &lhs, const Scalar &rhs);
 Scalar operator*(const Scalar &lhs, const Scalar &rhs);
 Scalar operator/(const Scalar &lhs, const Scalar &rhs);
 
-Scalar operator-(const Scalar &rhs);
-Scalar operator+(const Scalar &lhs, const Scalar &rhs);
-Scalar operator-(const Scalar &lhs, const Scalar &rhs);
-Scalar operator*(const Scalar &lhs, const Scalar &rhs);
-Scalar operator/(const Scalar &lhs, const Scalar &rhs);
+Scalar &operator+=(Scalar &lhs, const Scalar &rhs);
+Scalar &operator-=(Scalar &lhs, const Scalar &rhs);
+Scalar &operator*=(Scalar &lhs, const Scalar &rhs);
+Scalar &operator/=(Scalar &lhs, const Scalar &rhs);
 
 std::partial_ordering operator<=>(const Scalar &lhs, const Scalar &rhs);
 bool operator==(const Scalar &lhs, const Scalar &rhs);
@@ -59,6 +83,11 @@ Variable operator-(const Variable &lhs, const Variable &rhs);
 Variable operator*(const Variable &lhs, const Variable &rhs);
 Variable operator/(const Variable &lhs, const Variable &rhs);
 
+Variable &operator+=(Variable &lhs, const Variable &rhs);
+Variable &operator-=(Variable &lhs, const Variable &rhs);
+Variable &operator*=(Variable &lhs, const Variable &rhs);
+Variable &operator/=(Variable &lhs, const Variable &rhs);
+
 std::partial_ordering operator<=>(const Variable &lhs, const Variable &rhs);
 bool operator==(const Variable &lhs, const Variable &rhs);
 
@@ -75,11 +104,13 @@ Variable exp(const Variable &x);
 Variable abs(const Variable &x);
 Variable sqrt(const Variable &x);
 
-// Each formatter below inherits its parsing (precision, width, fill, ...)
-// from std::formatter<double>, and only overrides format() to first reduce
-// r/s/v to the double it holds. This is what makes std::format and
-// std::println accept a Real, a Scalar, or a Variable directly, formatting
-// each the same way to_double(...) would render it.
+Vector operator+(const Vector &lhs, const Vector &rhs);
+Vector operator-(const Vector &lhs, const Vector &rhs);
+Scalar dot(const Vector &lhs, const Vector &rhs);
+Matrix operator*(const Matrix &lhs, const Matrix &rhs);
+Vector operator*(const Matrix &lhs, const Vector &rhs);
+Vector operator*(const Vector &lhs, const Matrix &rhs);
+
 template <> struct std::formatter<Real> : std::formatter<double> {
   auto format(const Real &r, std::format_context &ctx) const {
     return std::formatter<double>::format(to_double(r), ctx);

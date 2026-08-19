@@ -5,7 +5,6 @@
 #include <algorithm>
 #include <cmath>
 #include <numbers>
-#include <vector>
 
 inline Scalar sigmoid(const Scalar &x) { return 1.0 / (1.0 + exp(-x)); }
 
@@ -36,7 +35,7 @@ inline Scalar GELU(const Scalar &x) {
           tanh(sqrt(2.0 / std::numbers::pi) * (x + 0.044715 * pow(x, 3.0))));
 }
 
-inline std::vector<Scalar> softmax(const std::vector<Scalar> &logits) {
+inline Vector softmax(const Vector &logits) {
   // Subtracts the maximum logit before exponentiating, which shifts every
   // input by the constant max_logit and therefore leaves the output
   // distribution unchanged: exp(x_i - c) / sum_j exp(x_j - c) equals
@@ -45,7 +44,7 @@ inline std::vector<Scalar> softmax(const std::vector<Scalar> &logits) {
   // logits would otherwise risk.
   Scalar max_logit = *std::max_element(logits.begin(), logits.end());
 
-  std::vector<Scalar> exps;
+  Vector exps;
   exps.reserve(logits.size());
   for (const auto &logit : logits) {
     exps.push_back(exp(logit - max_logit));
@@ -56,7 +55,7 @@ inline std::vector<Scalar> softmax(const std::vector<Scalar> &logits) {
     sum = sum + e;
   }
 
-  std::vector<Scalar> probs;
+  Vector probs;
   probs.reserve(exps.size());
   for (const auto &e : exps) {
     probs.push_back(e / sum);

@@ -81,6 +81,37 @@ int main() {
     expect_near("d(-x)/dx", to_double(tr.adjoints[x.id]), -1.0);
   }
 
+  // Compound assignment rebinds the local Variable to the new tape node
+  // produced by lhs OP rhs; it must not disturb the node the operand
+  // previously referred to, so gradients still have to reach the original
+  // leaves correctly after the rebind.
+  {
+    TraceScope scope;
+    Trace &tr = trace();
+    Variable x = tr.add_variable(Scalar{2.0}, nullptr);
+    Variable y = tr.add_variable(Scalar{3.0}, nullptr);
+
+    Variable out = x;
+    out += y;
+    expect_near("Variable x+=y primal", to_double(value_of(out)), 5.0);
+    tr.backward(out);
+    expect_near("d(x+=y)/dx", to_double(tr.adjoints[x.id]), 1.0);
+    expect_near("d(x+=y)/dy", to_double(tr.adjoints[y.id]), 1.0);
+  }
+  {
+    TraceScope scope;
+    Trace &tr = trace();
+    Variable x = tr.add_variable(Scalar{2.0}, nullptr);
+    Variable y = tr.add_variable(Scalar{3.0}, nullptr);
+
+    Variable out = x;
+    out *= y;
+    expect_near("Variable x*=y primal", to_double(value_of(out)), 6.0);
+    tr.backward(out);
+    expect_near("d(x*=y)/dx", to_double(tr.adjoints[x.id]), 3.0); // = y
+    expect_near("d(x*=y)/dy", to_double(tr.adjoints[y.id]), 2.0); // = x
+  }
+
   // Comparisons compare by value, not by trace identity.
   {
     TraceScope scope;

@@ -16,6 +16,30 @@ int main() {
   expect_near("2 / 3", to_double(a / b), 2.0 / 3.0);
   expect_near("-2", to_double(-a), -2.0);
 
+  // Compound assignment: each is sugar for lhs = lhs OP rhs, so check it
+  // against the already-verified binary operator above rather than a
+  // separately hand-computed value.
+  {
+    Scalar s{2.0};
+    s += Scalar{3.0};
+    expect_near("2 += 3", to_double(s), to_double(a + b));
+  }
+  {
+    Scalar s{2.0};
+    s -= Scalar{3.0};
+    expect_near("2 -= 3", to_double(s), to_double(a - b));
+  }
+  {
+    Scalar s{2.0};
+    s *= Scalar{3.0};
+    expect_near("2 *= 3", to_double(s), to_double(a * b));
+  }
+  {
+    Scalar s{2.0};
+    s /= Scalar{3.0};
+    expect_near("2 /= 3", to_double(s), to_double(a / b));
+  }
+
   expect_true("2 == 2", Scalar{2.0} == Scalar{2.0});
   expect_true("2 != 3", !(a == b));
   expect_true("2 < 3", a < b);
