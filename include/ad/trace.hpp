@@ -82,8 +82,6 @@ template <typename... Args> Trace &trace_of(const Args &...args) {
   return *result;
 }
 
-// TODO: constants have no backprop, so maybe we could modify operator overloads
-// to use their value directly...
 inline Variable lift(const Scalar &s, Trace &t) {
   if (const Variable *v = std::get_if<Variable>(&s)) {
     return *v;

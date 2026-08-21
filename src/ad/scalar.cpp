@@ -76,10 +76,12 @@ Scalar operator+(const Scalar &lhs, const Scalar &rhs) {
     if (const Real *r = std::get_if<Real>(&rhs)) {
       return real_op(*l, *r, [](auto a, auto b) { return a + b; });
     }
+    return Scalar{*l + std::get<Variable>(rhs)};
   }
-
-  Trace &tr = trace_of(lhs, rhs);
-  return Scalar{lift(lhs, tr) + lift(rhs, tr)};
+  if (const Real *r = std::get_if<Real>(&rhs)) {
+    return Scalar{std::get<Variable>(lhs) + *r};
+  }
+  return Scalar{std::get<Variable>(lhs) + std::get<Variable>(rhs)};
 }
 
 Scalar operator-(const Scalar &lhs, const Scalar &rhs) {
@@ -87,10 +89,12 @@ Scalar operator-(const Scalar &lhs, const Scalar &rhs) {
     if (const Real *r = std::get_if<Real>(&rhs)) {
       return real_op(*l, *r, [](auto a, auto b) { return a - b; });
     }
+    return Scalar{*l - std::get<Variable>(rhs)};
   }
-
-  Trace &tr = trace_of(lhs, rhs);
-  return Scalar{lift(lhs, tr) - lift(rhs, tr)};
+  if (const Real *r = std::get_if<Real>(&rhs)) {
+    return Scalar{std::get<Variable>(lhs) - *r};
+  }
+  return Scalar{std::get<Variable>(lhs) - std::get<Variable>(rhs)};
 }
 
 Scalar operator*(const Scalar &lhs, const Scalar &rhs) {
@@ -98,10 +102,12 @@ Scalar operator*(const Scalar &lhs, const Scalar &rhs) {
     if (const Real *r = std::get_if<Real>(&rhs)) {
       return real_op(*l, *r, [](auto a, auto b) { return a * b; });
     }
+    return Scalar{*l * std::get<Variable>(rhs)};
   }
-
-  Trace &tr = trace_of(lhs, rhs);
-  return Scalar{lift(lhs, tr) * lift(rhs, tr)};
+  if (const Real *r = std::get_if<Real>(&rhs)) {
+    return Scalar{std::get<Variable>(lhs) * *r};
+  }
+  return Scalar{std::get<Variable>(lhs) * std::get<Variable>(rhs)};
 }
 
 Scalar operator/(const Scalar &lhs, const Scalar &rhs) {
@@ -109,10 +115,12 @@ Scalar operator/(const Scalar &lhs, const Scalar &rhs) {
     if (const Real *r = std::get_if<Real>(&rhs)) {
       return real_op(*l, *r, [](auto a, auto b) { return a / b; });
     }
+    return Scalar{*l / std::get<Variable>(rhs)};
   }
-
-  Trace &tr = trace_of(lhs, rhs);
-  return Scalar{lift(lhs, tr) / lift(rhs, tr)};
+  if (const Real *r = std::get_if<Real>(&rhs)) {
+    return Scalar{std::get<Variable>(lhs) / *r};
+  }
+  return Scalar{std::get<Variable>(lhs) / std::get<Variable>(rhs)};
 }
 
 Scalar operator-(const Scalar &rhs) {
@@ -197,10 +205,12 @@ Scalar pow(const Scalar &base, const Scalar &exponent) {
     if (const Real *e = std::get_if<Real>(&exponent)) {
       return real_op(*b, *e, [](auto bb, auto ee) { return std::pow(bb, ee); });
     }
+    return Scalar{pow(*b, std::get<Variable>(exponent))};
   }
-
-  Trace &tr = trace_of(base, exponent);
-  return Scalar{pow(lift(base, tr), lift(exponent, tr))};
+  if (const Real *e = std::get_if<Real>(&exponent)) {
+    return Scalar{pow(std::get<Variable>(base), *e)};
+  }
+  return Scalar{pow(std::get<Variable>(base), std::get<Variable>(exponent))};
 }
 
 Scalar log(const Scalar &x) {
@@ -290,6 +300,91 @@ Variable operator-(const Variable &rhs) {
   return tr.add_variable(value, [rhs](size_t self_id) {
     Trace &tr = *rhs.trace;
     tr.adjoints[rhs.id] = tr.adjoints[rhs.id] - tr.adjoints[self_id];
+  });
+}
+
+Variable operator+(const Variable &lhs, const Real &rhs) {
+  Trace &tr = *lhs.trace;
+  Scalar value = tr.primals[lhs.id] + Scalar{rhs};
+  return tr.add_variable(value, [lhs](size_t self_id) {
+    Trace &tr = *lhs.trace;
+    tr.adjoints[lhs.id] = tr.adjoints[lhs.id] + tr.adjoints[self_id];
+  });
+}
+
+Variable operator+(const Real &lhs, const Variable &rhs) { return rhs + lhs; }
+
+Variable operator-(const Variable &lhs, const Real &rhs) {
+  Trace &tr = *lhs.trace;
+  Scalar value = tr.primals[lhs.id] - Scalar{rhs};
+  return tr.add_variable(value, [lhs](size_t self_id) {
+    Trace &tr = *lhs.trace;
+    tr.adjoints[lhs.id] = tr.adjoints[lhs.id] + tr.adjoints[self_id];
+  });
+}
+
+Variable operator-(const Real &lhs, const Variable &rhs) {
+  Trace &tr = *rhs.trace;
+  Scalar value = Scalar{lhs} - tr.primals[rhs.id];
+  return tr.add_variable(value, [rhs](size_t self_id) {
+    Trace &tr = *rhs.trace;
+    tr.adjoints[rhs.id] = tr.adjoints[rhs.id] - tr.adjoints[self_id];
+  });
+}
+
+Variable operator*(const Variable &lhs, const Real &rhs) {
+  Trace &tr = *lhs.trace;
+  Scalar value = tr.primals[lhs.id] * Scalar{rhs};
+  return tr.add_variable(value, [lhs, rhs](size_t self_id) {
+    Trace &tr = *lhs.trace;
+    tr.adjoints[lhs.id] =
+        tr.adjoints[lhs.id] + tr.adjoints[self_id] * Scalar{rhs};
+  });
+}
+
+Variable operator*(const Real &lhs, const Variable &rhs) { return rhs * lhs; }
+
+Variable operator/(const Variable &lhs, const Real &rhs) {
+  Trace &tr = *lhs.trace;
+  Scalar value = tr.primals[lhs.id] / Scalar{rhs};
+  return tr.add_variable(value, [lhs, rhs](size_t self_id) {
+    Trace &tr = *lhs.trace;
+    tr.adjoints[lhs.id] =
+        tr.adjoints[lhs.id] + tr.adjoints[self_id] / Scalar{rhs};
+  });
+}
+
+Variable operator/(const Real &lhs, const Variable &rhs) {
+  Trace &tr = *rhs.trace;
+  Scalar value = Scalar{lhs} / tr.primals[rhs.id];
+  return tr.add_variable(value, [lhs, rhs](size_t self_id) {
+    Trace &tr = *rhs.trace;
+    const Scalar &rval = tr.primals[rhs.id];
+    tr.adjoints[rhs.id] = tr.adjoints[rhs.id] -
+                          tr.adjoints[self_id] * Scalar{lhs} / (rval * rval);
+  });
+}
+
+Variable pow(const Variable &base, const Real &exponent) {
+  Trace &tr = *base.trace;
+  Scalar value = pow(tr.primals[base.id], Scalar{exponent});
+  return tr.add_variable(value, [base, exponent](size_t self_id) {
+    Trace &tr = *base.trace;
+    const Scalar &base_val = tr.primals[base.id];
+    tr.adjoints[base.id] =
+        tr.adjoints[base.id] + tr.adjoints[self_id] * Scalar{exponent} *
+                                    pow(base_val, Scalar{exponent} - Scalar{1.0});
+  });
+}
+
+Variable pow(const Real &base, const Variable &exponent) {
+  Trace &tr = *exponent.trace;
+  Scalar value = pow(Scalar{base}, tr.primals[exponent.id]);
+  return tr.add_variable(value, [base, exponent](size_t self_id) {
+    Trace &tr = *exponent.trace;
+    const Scalar &y = tr.primals[self_id];
+    tr.adjoints[exponent.id] =
+        tr.adjoints[exponent.id] + tr.adjoints[self_id] * y * log(Scalar{base});
   });
 }
 

@@ -10,7 +10,7 @@ nanojax_incdir = include_directories('include')
 
 nanojax_lib = static_library(
   'nanojax',
-  ['src/ad/scalar.cpp'],
+  ['src/ad/scalar.cpp', 'src/nn/data/dataset.cpp'],
   include_directories: nanojax_incdir,
 )
 

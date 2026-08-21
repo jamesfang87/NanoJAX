@@ -83,6 +83,17 @@ Variable operator-(const Variable &lhs, const Variable &rhs);
 Variable operator*(const Variable &lhs, const Variable &rhs);
 Variable operator/(const Variable &lhs, const Variable &rhs);
 
+Variable operator+(const Variable &lhs, const Real &rhs);
+Variable operator+(const Real &lhs, const Variable &rhs);
+Variable operator-(const Variable &lhs, const Real &rhs);
+Variable operator-(const Real &lhs, const Variable &rhs);
+Variable operator*(const Variable &lhs, const Real &rhs);
+Variable operator*(const Real &lhs, const Variable &rhs);
+Variable operator/(const Variable &lhs, const Real &rhs);
+Variable operator/(const Real &lhs, const Variable &rhs);
+Variable pow(const Variable &base, const Real &exponent);
+Variable pow(const Real &base, const Variable &exponent);
+
 Variable &operator+=(Variable &lhs, const Variable &rhs);
 Variable &operator-=(Variable &lhs, const Variable &rhs);
 Variable &operator*=(Variable &lhs, const Variable &rhs);
