@@ -11,8 +11,8 @@ private:
   bool use_bias;
 
 public:
-  // The full set of learnable arrays for one layer. b is left as an empty
-  // Vector when the layer has no bias
+  // b is left as an empty
+  //  Vector when the layer has no bias
   struct Params {
     Matrix w;
     Vector b;
@@ -38,3 +38,17 @@ public:
   size_t input_features() const { return in_features; }
   size_t output_features() const { return out_features; }
 };
+
+// Lets grad() (ad/grad.hpp) read gradients through an MLP::Params
+template <typename F>
+MLP::Params map_scalars(const MLP::Params &p, const F &fn) {
+  return MLP::Params{map_scalars(p.w, fn), map_scalars(p.b, fn)};
+}
+
+// Lets an Optimizer (nn/optimizers/optim.hpp) combine an MLP::Params with a
+// same-shaped gradient
+template <typename F>
+MLP::Params zip_scalars(const MLP::Params &a, const MLP::Params &b,
+                        const F &fn) {
+  return MLP::Params{zip_scalars(a.w, b.w, fn), zip_scalars(a.b, b.b, fn)};
+}

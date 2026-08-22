@@ -95,8 +95,8 @@ int main() {
     expect_near(c.name, analytic, numeric);
   }
 
-  // Binary primitives: grad() returns the full gradient vector for a
-  // two-argument function, so each component is checked against the
+  // Binary primitives: grad() returns a tuple of the two partials for a
+  // two-argument function, so each entry is checked against the
   // corresponding partial derivative.
   {
     std::vector<std::pair<
@@ -112,10 +112,10 @@ int main() {
 
     double a0 = 2.0, b0 = 3.0;
     for (const auto &[name, f] : binary_cases) {
-      Vector g = grad(f)(a0, b0);
+      auto [dfa, dfb] = grad(f)(a0, b0);
       auto [da, db] = central_diff2(f, a0, b0);
-      expect_near("d/da " + name, to_double(g[0]), da);
-      expect_near("d/db " + name, to_double(g[1]), db);
+      expect_near("d/da " + name, to_double(dfa), da);
+      expect_near("d/db " + name, to_double(dfb), db);
     }
   }
 

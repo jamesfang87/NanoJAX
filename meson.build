@@ -23,7 +23,7 @@ nanojax_exe = executable(
 
 foreach name : [
   'test_scalar', 'test_variable', 'test_grad', 'test_gradcheck', 'test_loss',
-  'test_vecmat', 'test_mlp'
+  'test_vecmat', 'test_mlp', 'test_optim'
 ]
   test(
     name,

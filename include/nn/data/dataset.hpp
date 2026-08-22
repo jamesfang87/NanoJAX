@@ -19,6 +19,8 @@ public:
   virtual Sample operator[](size_t index) const = 0;
 };
 
+// We hence provide a few example datasets...
+
 class MNISTDataset : public Dataset {
 public:
   static constexpr size_t kRows = 28;

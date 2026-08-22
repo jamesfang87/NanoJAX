@@ -2,6 +2,7 @@
 #include "include/ad/scalar.hpp"
 #include "include/ad/trace.hpp"
 
+#include "include/nn/layers/activation/activations.hpp"
 #include "include/nn/layers/module/mlp.hpp"
 
 #include "tests/test_utils.hpp"
@@ -34,22 +35,37 @@ void set_weights(MLP::Params &params, size_t in_features, size_t out_features) {
   }
 }
 
-// Flattens a 3-in, 2-out layer's apply() into a function of eleven plain
-// scalar arguments (six weight entries, two bias entries, three input
-// entries), which is the shape grad() requires
-Vector apply_flat(const Scalar &w00, const Scalar &w01, const Scalar &w10,
-                  const Scalar &w11, const Scalar &w20, const Scalar &w21,
-                  const Scalar &b0, const Scalar &b1, const Scalar &x0,
-                  const Scalar &x1, const Scalar &x2) {
-  MLP::Params params{Matrix(3, 2), Vector{b0, b1}};
-  params.w(0, 0) = w00;
-  params.w(0, 1) = w01;
-  params.w(1, 0) = w10;
-  params.w(1, 1) = w11;
-  params.w(2, 0) = w20;
-  params.w(2, 1) = w21;
-  Vector x = {x0, x1, x2};
-  return MLP::apply(params, x);
+// ReLU is only defined on a single Scalar in activations.hpp; this applies
+// it elementwise so it can sit between two apply() calls.
+Vector relu_vec(const Vector &v) {
+  Vector out(v.size());
+  for (size_t i = 0; i < v.size(); ++i) {
+    out[i] = ReLU(v[i]);
+  }
+  return out;
+}
+
+// The 2-3-2 network from the ReLU-composition demo, taking both layers'
+// Params and the input directly rather than a flattened scalar argument
+// list. Because this returns a Vector, grad(two_layer_relu, argnums=k)
+// selects y_k as the scalar to backpropagate from, giving row k of the
+// whole network's Jacobian, shaped as (dy_k/dP1, dy_k/dP2, dy_k/dx), in
+// one pass.
+Vector two_layer_relu(const MLP::Params &p1, const MLP::Params &p2,
+                      const Vector &x) {
+  return MLP::apply(p2, relu_vec(MLP::apply(p1, x)));
+}
+
+// Same network, folded into a Scalar loss against a fixed target instead
+// of returning y directly. grad(two_layer_relu_loss) then differentiates
+// with respect to every one of its three arguments in a single backward
+// pass, and since none of them is a single Scalar, each comes back shaped
+// like itself: a Params of gradients for p1, a Params for p2, and a
+// Vector for x.
+Scalar two_layer_relu_loss(const MLP::Params &p1, const MLP::Params &p2,
+                           const Vector &x) {
+  Vector target = {Scalar{1.0}, Scalar{1.0}};
+  return dot(two_layer_relu(p1, p2, x), target);
 }
 
 } // namespace
@@ -153,43 +169,120 @@ int main() {
                 target_vals[0] * w_vals[2][0] + target_vals[1] * w_vals[2][1]);
   }
 
-  // Compatibility with grad(): unlike jax.grad, where argnums selects which
-  // of f's input arguments to differentiate with respect to, NanoJax's
-  // grad(f, argnums) always differentiates with respect to every scalar
-  // argument f is called with, and argnums instead selects which entry of
-  // a Vector-valued f's output to use as the scalar to backpropagate from.
-  // apply_flat returns the layer's two-entry output Vector directly, so
-  // grad(apply_flat, argnums=i) computes row i of apply's Jacobian, i.e.
-  // dy_i/d(w00, w01, w10, w11, w20, w21, b0, b1, x0, x1, x2), all in one
-  // backward pass.
+  // Compatibility with grad(), using MLP::Params directly: unlike jax.grad,
+  // where argnums selects which of f's input arguments to differentiate
+  // with respect to, NanoJax's grad(f, argnums) always differentiates with
+  // respect to every argument f is called with, and argnums instead
+  // selects which entry of a Vector-valued f's output to use as the scalar
+  // to backpropagate from. MLP::apply itself, unmodified, is a valid f
+  // here: grad(MLP::apply, argnums=i)(params, x) computes row i of apply's
+  // Jacobian and hands it back as a (Params, Vector) pair shaped exactly
+  // like (params, x) themselves, since grad() lifts and reads back
+  // gradients through Params the same way it does a bare Vector.
   {
-    double w_vals[3][2] = {{1.0, 2.0}, {3.0, 4.0}, {5.0, 6.0}};
-    double b_vals[2] = {0.5, -0.5};
-    double x_vals[3] = {1.0, 2.0, 3.0};
-
-    auto call = [&](auto &g) {
-      return g(w_vals[0][0], w_vals[0][1], w_vals[1][0], w_vals[1][1],
-               w_vals[2][0], w_vals[2][1], b_vals[0], b_vals[1], x_vals[0],
-               x_vals[1], x_vals[2]);
-    };
+    MLP layer(3, 2);
+    MLP::Params params = layer.init();
+    set_weights(params, 3, 2);
+    Vector x = {Scalar{1.0}, Scalar{2.0}, Scalar{3.0}};
 
     // Row 0: dy0/d(...).
-    auto row0 = grad(apply_flat, /*argnums=*/0);
-    Vector g0 = call(row0);
-    expect_vector_near("grad(apply_flat, argnums=0)", g0,
-                       {Scalar{x_vals[0]}, Scalar{0.0}, Scalar{x_vals[1]},
-                        Scalar{0.0}, Scalar{x_vals[2]}, Scalar{0.0},
-                        Scalar{1.0}, Scalar{0.0}, Scalar{w_vals[0][0]},
-                        Scalar{w_vals[1][0]}, Scalar{w_vals[2][0]}});
+    auto row0 = grad(MLP::apply, /*argnums=*/0);
+    auto [dparams0, dx0] = row0(params, x);
+    expect_vector_near("dy0/dW", dparams0.w.data,
+                       {Scalar{1.0}, Scalar{0.0}, Scalar{2.0}, Scalar{0.0},
+                        Scalar{3.0}, Scalar{0.0}});
+    expect_vector_near("dy0/db", dparams0.b, {Scalar{1.0}, Scalar{0.0}});
+    expect_vector_near("dy0/dx", dx0, {Scalar{1.0}, Scalar{3.0}, Scalar{5.0}});
 
     // Row 1: dy1/d(...).
-    auto row1 = grad(apply_flat, /*argnums=*/1);
-    Vector g1 = call(row1);
-    expect_vector_near("grad(apply_flat, argnums=1)", g1,
-                       {Scalar{0.0}, Scalar{x_vals[0]}, Scalar{0.0},
-                        Scalar{x_vals[1]}, Scalar{0.0}, Scalar{x_vals[2]},
-                        Scalar{0.0}, Scalar{1.0}, Scalar{w_vals[0][1]},
-                        Scalar{w_vals[1][1]}, Scalar{w_vals[2][1]}});
+    auto row1 = grad(MLP::apply, /*argnums=*/1);
+    auto [dparams1, dx1] = row1(params, x);
+    expect_vector_near("dy1/dW", dparams1.w.data,
+                       {Scalar{0.0}, Scalar{1.0}, Scalar{0.0}, Scalar{2.0},
+                        Scalar{0.0}, Scalar{3.0}});
+    expect_vector_near("dy1/db", dparams1.b, {Scalar{0.0}, Scalar{1.0}});
+    expect_vector_near("dy1/dx", dx1, {Scalar{2.0}, Scalar{4.0}, Scalar{6.0}});
+  }
+
+  // Two-layer MLP with a ReLU in between, via grad() and MLP::Params: a
+  // 2-3-2 network where W1, b1 are chosen so that the hidden pre-activation
+  // has one positive entry (unit 0) and two non-positive entries (units 1,
+  // 2), exercising ReLU's gating of the backward pass rather than just its
+  // forward branch.
+  //
+  //   h_pre = x * W1 + b1 = [3.5, -2.5, 0.0]
+  //   h     = ReLU(h_pre) = [3.5, 0.0, 0.0]
+  //   y     = h * W2 + b2 = [3.6, 1.65]
+  //
+  // two_layer_relu returns y itself rather than a loss and takes p1, p2,
+  // and x directly, so grad(two_layer_relu, argnums=k)(p1, p2, x) gives row
+  // k of the whole network's Jacobian as (dy_k/dP1, dy_k/dP2, dy_k/dx),
+  // each shaped like its own argument. Since h1 = h2 = 0, every path
+  // through hidden units 1 and 2 is zeroed by ReLU's backward closure,
+  // leaving only the entries that route through unit 0 nonzero in both
+  // rows.
+  {
+    MLP::Params p1{Matrix(2, 3), Vector{Scalar{0.5}, Scalar{-0.5}, Scalar{0.0}}};
+    p1.w(0, 0) = Scalar{1.0};
+    p1.w(0, 1) = Scalar{-1.0};
+    p1.w(0, 2) = Scalar{0.5};
+    p1.w(1, 0) = Scalar{-2.0};
+    p1.w(1, 1) = Scalar{1.0};
+    p1.w(1, 2) = Scalar{0.5};
+
+    MLP::Params p2{Matrix(3, 2), Vector{Scalar{0.1}, Scalar{-0.1}}};
+    p2.w(0, 0) = Scalar{1.0};
+    p2.w(0, 1) = Scalar{0.5};
+    p2.w(1, 0) = Scalar{-1.0};
+    p2.w(1, 1) = Scalar{2.0};
+    p2.w(2, 0) = Scalar{0.5};
+    p2.w(2, 1) = Scalar{-0.5};
+
+    Vector x = {Scalar{1.0}, Scalar{-1.0}};
+
+    auto row0 = grad(two_layer_relu, /*argnums=*/0);
+    auto [dp1_0, dp2_0, dx_0] = row0(p1, p2, x);
+    expect_vector_near("dy0/dW1", dp1_0.w.data,
+                       {Scalar{1.0}, Scalar{0.0}, Scalar{0.0}, Scalar{-1.0},
+                        Scalar{0.0}, Scalar{0.0}});
+    expect_vector_near("dy0/db1", dp1_0.b, {Scalar{1.0}, Scalar{0.0}, Scalar{0.0}});
+    expect_vector_near("dy0/dW2", dp2_0.w.data,
+                       {Scalar{3.5}, Scalar{0.0}, Scalar{0.0}, Scalar{0.0},
+                        Scalar{0.0}, Scalar{0.0}});
+    expect_vector_near("dy0/db2", dp2_0.b, {Scalar{1.0}, Scalar{0.0}});
+    expect_vector_near("dy0/dx", dx_0, {Scalar{1.0}, Scalar{-2.0}});
+
+    auto row1 = grad(two_layer_relu, /*argnums=*/1);
+    auto [dp1_1, dp2_1, dx_1] = row1(p1, p2, x);
+    expect_vector_near("dy1/dW1", dp1_1.w.data,
+                       {Scalar{0.5}, Scalar{0.0}, Scalar{0.0}, Scalar{-0.5},
+                        Scalar{0.0}, Scalar{0.0}});
+    expect_vector_near("dy1/db1", dp1_1.b, {Scalar{0.5}, Scalar{0.0}, Scalar{0.0}});
+    expect_vector_near("dy1/dW2", dp2_1.w.data,
+                       {Scalar{0.0}, Scalar{3.5}, Scalar{0.0}, Scalar{0.0},
+                        Scalar{0.0}, Scalar{0.0}});
+    expect_vector_near("dy1/db2", dp2_1.b, {Scalar{0.0}, Scalar{1.0}});
+    expect_vector_near("dy1/dx", dx_1, {Scalar{0.5}, Scalar{-1.0}});
+
+    // Same 2-3-2 ReLU network, but reached through the full-gradient form
+    // of grad() instead of a per-output Jacobian row: two_layer_relu_loss
+    // folds the whole forward pass, including the ReLU and the dot with
+    // target, into a Scalar loss of the same three arguments. Because
+    // none of p1, p2, x is a single Scalar, grad()'s argnums selection
+    // never comes into play, and the returned tuple's entries are shaped
+    // like p1, p2, and x themselves; entrywise, they equal row0 + row1
+    // above, since loss = dot(y, [1, 1]) = y0 + y1.
+    auto dloss = grad(two_layer_relu_loss);
+    auto [dp1, dp2, dx] = dloss(p1, p2, x);
+    expect_vector_near("d(loss)/dW1", dp1.w.data,
+                       {Scalar{1.5}, Scalar{0.0}, Scalar{0.0}, Scalar{-1.5},
+                        Scalar{0.0}, Scalar{0.0}});
+    expect_vector_near("d(loss)/db1", dp1.b, {Scalar{1.5}, Scalar{0.0}, Scalar{0.0}});
+    expect_vector_near("d(loss)/dW2", dp2.w.data,
+                       {Scalar{3.5}, Scalar{3.5}, Scalar{0.0}, Scalar{0.0},
+                        Scalar{0.0}, Scalar{0.0}});
+    expect_vector_near("d(loss)/db2", dp2.b, {Scalar{1.0}, Scalar{1.0}});
+    expect_vector_near("d(loss)/dx", dx, {Scalar{1.5}, Scalar{-3.0}});
   }
 
   return nanojax_test::report();

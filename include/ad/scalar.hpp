@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cassert>
 #include <compare>
 #include <cstddef>
 #include <format>
@@ -121,6 +122,48 @@ Scalar dot(const Vector &lhs, const Vector &rhs);
 Matrix operator*(const Matrix &lhs, const Matrix &rhs);
 Vector operator*(const Matrix &lhs, const Vector &rhs);
 Vector operator*(const Vector &lhs, const Matrix &rhs);
+
+template <typename F> Scalar map_scalars(const Scalar &s, const F &fn) {
+  return fn(s);
+}
+
+template <typename F> Vector map_scalars(const Vector &v, const F &fn) {
+  Vector out(v.size());
+  for (size_t i = 0; i < v.size(); ++i) {
+    out[i] = map_scalars(v[i], fn);
+  }
+  return out;
+}
+
+template <typename F> Matrix map_scalars(const Matrix &m, const F &fn) {
+  Matrix out(m.rows, m.cols);
+  out.data = map_scalars(m.data, fn);
+  return out;
+}
+
+template <typename F>
+Scalar zip_scalars(const Scalar &a, const Scalar &b, const F &fn) {
+  return fn(a, b);
+}
+
+template <typename F>
+Vector zip_scalars(const Vector &a, const Vector &b, const F &fn) {
+  assert(a.size() == b.size() && "zip_scalars: Vector size mismatch");
+  Vector out(a.size());
+  for (size_t i = 0; i < a.size(); ++i) {
+    out[i] = zip_scalars(a[i], b[i], fn);
+  }
+  return out;
+}
+
+template <typename F>
+Matrix zip_scalars(const Matrix &a, const Matrix &b, const F &fn) {
+  assert(a.rows == b.rows && a.cols == b.cols &&
+         "zip_scalars: Matrix shape mismatch");
+  Matrix out(a.rows, a.cols);
+  out.data = zip_scalars(a.data, b.data, fn);
+  return out;
+}
 
 template <> struct std::formatter<Real> : std::formatter<double> {
   auto format(const Real &r, std::format_context &ctx) const {
