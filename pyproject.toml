@@ -1,0 +1,10 @@
+[build-system]
+requires = ["meson-python>=0.16.0", "nanobind>=2.0.0"]
+build-backend = "mesonpy"
+
+[project]
+name = "nanojax"
+version = "0.1.0"
+description = "A tensor and autodiff core with a NumPy/Torch-style Python interface."
+readme = "README.md"
+requires-python = ">=3.10"
