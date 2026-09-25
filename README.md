@@ -32,4 +32,4 @@ g = df(3.0);
 
 
 # Notes
-Everything else is implemented except for CUDA support; I neglected to bring my system with CUDA to college, so hardware acceleration with CUDA will likely have to wait until the next time I go home, since I do not have access to a system with CUDA installed. 
+Everything else is implemented except for CUDA support; I forgot to bring my system with CUDA to college, so hardware acceleration with CUDA will likely have to wait until the next time I go home, since I do not have access to a system with CUDA installed. 
