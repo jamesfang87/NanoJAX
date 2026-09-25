@@ -54,21 +54,6 @@ nanojax_dep = declare_dependency(
   dependencies: nanojax_deps,
 )
 
-nanojax_lib = library(
-  'nanojax_core',
-  'src/tensor/tensor.cpp',
-  include_directories: inc,
-  dependencies: nanojax_deps,
-)
-
-executable(
-  'nanojax',
-  'src/main.cpp',
-  include_directories: inc,
-  dependencies: nanojax_deps,
-  link_with: nanojax_lib,
-)
-
 subdir('tests')
 subdir('bindings')
 subdir('python')

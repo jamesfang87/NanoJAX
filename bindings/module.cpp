@@ -366,12 +366,8 @@ PyTensor op_pow(const PyTensor& a, nb::handle exponent) {
     return visit_scalar(a, exponent, [](const auto& x, const auto& v) { return pow(x, v); });
 }
 
-// A reverse-mode tape, type-erased over the floating dtypes. Python's grad()
-// creates one, lifts its inputs onto it, runs the function, then calls
-// backward and reads the adjoints.
 struct PyTrace {
-    using Variant =
-        std::variant<std::shared_ptr<Trace<float>>, std::shared_ptr<Trace<double>>>;
+    using Variant = std::variant<std::shared_ptr<Trace<float>>, std::shared_ptr<Trace<double>>>;
     Variant value;
 };
 
@@ -385,9 +381,6 @@ PyTrace make_trace(const std::string& dtype) {
     throw std::invalid_argument{"autodiff needs a floating dtype: float32 or float64"};
 }
 
-// Active traces, innermost last. Ops read the trace from their operands, so
-// this stack is only needed to attach new leaves and to pick the trace whose
-// reverse pass to run.
 thread_local std::vector<PyTrace> trace_stack;
 
 PyTrace& current_trace() {
@@ -397,7 +390,7 @@ PyTrace& current_trace() {
     return trace_stack.back();
 }
 
-PyTensor trace_lift(const PyTensor& tensor) {
+PyTensor trace_attach(const PyTensor& tensor) {
     PyTrace& trace = current_trace();
     return std::visit(
         [&](const auto& x) -> PyTensor {
@@ -444,9 +437,10 @@ PyTensor trace_adjoint(const PyTensor& tensor) {
             if constexpr (std::is_same_v<T, float> || std::is_same_v<T, double>) {
                 const auto* tr = std::get_if<std::shared_ptr<Trace<T>>>(&trace.value);
                 if (tr == nullptr || !x.is_tracked() || x.trace() != tr->get()) {
-                    throw std::invalid_argument{"adjoint needs a tensor lifted on the current trace"};
+                    throw std::invalid_argument{
+                        "adjoint needs a tensor lifted on the current trace"};
                 }
-                return PyTensor{(*tr)->adjoints_[x.id()]};
+                return PyTensor{(*tr)->adjoint(x)};
             } else {
                 throw std::invalid_argument{"autodiff needs a floating tensor"};
             }
@@ -837,9 +831,6 @@ NB_MODULE(_tensor, t) {
         },
         nb::call_guard<nb::gil_scoped_release>());
 
-    // Trace control: enough to write grad() in Python. A Trace is a context
-    // manager; while it is active, lift/backward/adjoint act on the innermost
-    // trace on the stack.
     nb::class_<PyTrace>(t, "Trace")
         .def(
             "__init__",
@@ -847,21 +838,21 @@ NB_MODULE(_tensor, t) {
             nb::arg("dtype") = "float32")
         .def("__enter__",
              [](PyTrace& self) -> PyTrace& {
+                 std::visit([](auto& trace) { trace->push(); }, self.value);
                  trace_stack.push_back(self);
                  return self;
              })
-        .def("__exit__",
-             [](PyTrace&, nb::args) {
-                 trace_stack.pop_back();
-                 return false;
-             });
+        .def("__exit__", [](PyTrace& self, nb::args) {
+            std::visit([](auto& trace) { trace->pop(); }, self.value);
+            trace_stack.pop_back();
+            return false;
+        });
 
-    t.def("lift", &trace_lift, nb::arg("tensor"));
+    t.def("attach", &trace_attach, nb::arg("tensor"));
     t.def("backward", &trace_backward, nb::arg("output"));
     t.def("adjoint", &trace_adjoint, nb::arg("tensor"));
 
-    t.def("stop_gradient",
-          [](const PyTensor& a) {
-              return visit_unary(a, [](const auto& x) { return x.detach(); });
-          });
+    t.def("stop_gradient", [](const PyTensor& a) {
+        return visit_unary(a, [](const auto& x) { return x.detach(); });
+    });
 }

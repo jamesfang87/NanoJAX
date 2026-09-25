@@ -49,7 +49,7 @@ template <typename dtype>
     requires std::is_trivially_copyable_v<dtype>
 class Tensor {
   private:
-    std::shared_ptr<TensorStorage<dtype>> storage_;
+    std::shared_ptr<Storage<dtype>> storage_;
     Device device_ = Device::CPU;
 
     size_t offset_ = 0;
@@ -58,8 +58,7 @@ class Tensor {
 
     template <typename> friend class Trace;
 
-    Trace<dtype>* trace_ = nullptr;
-    size_t id_ = 0;
+    boost::container::small_vector<std::pair<Trace<dtype>*, size_t>, 2> tags_;
 
     /**
      * @brief Returns the number of elements in @p shape.
@@ -91,7 +90,7 @@ class Tensor {
      * @param offset Index of the tensor's first element within @p storage.
      * @param device Where @p storage lives.
      */
-    explicit Tensor(std::shared_ptr<TensorStorage<dtype>> storage, std::span<const size_t> shape,
+    explicit Tensor(std::shared_ptr<Storage<dtype>> storage, std::span<const size_t> shape,
                     size_t offset = 0, Device device = Device::CPU)
         : storage_(std::move(storage)), device_(device), offset_(offset) {
         assign_shape(shape);
@@ -106,7 +105,7 @@ class Tensor {
      * @param device Where @p storage lives.
      * @note The strides are taken as given, so the view need not be contiguous.
      */
-    explicit Tensor(std::shared_ptr<TensorStorage<dtype>> storage, std::span<const size_t> shape,
+    explicit Tensor(std::shared_ptr<Storage<dtype>> storage, std::span<const size_t> shape,
                     std::span<const size_t> stride, size_t offset, Device device)
         : storage_(std::move(storage)), device_(device), offset_(offset),
           shape_(shape.begin(), shape.end()), stride_(stride.begin(), stride.end()) {}
@@ -540,22 +539,72 @@ class Tensor {
     }
 
     /**
-     * @brief True if this tensor is a node in a trace.
+     * @brief True if this tensor is a node in at least one trace.
      * @return True if the tensor was produced by a tracked operation.
      */
-    bool is_tracked() const { return trace_ != nullptr; }
+    bool is_tracked() const { return !tags_.empty(); }
 
     /**
-     * @brief Returns the trace this tensor belongs to.
-     * @return The owning trace, or nullptr when the tensor is untracked.
+     * @brief Returns the trace this tensor is primarily tagged on.
+     * @return The innermost (most recently recorded) trace, or nullptr when the
+     *         tensor is untracked.
      */
-    Trace<dtype>* trace() const { return trace_; }
+    Trace<dtype>* trace() const { return tags_.empty() ? nullptr : tags_.back().first; }
 
     /**
-     * @brief Returns this tensor's node index within its trace.
+     * @brief Returns this tensor's node index within its primary trace.
      * @return The node index; meaningless when the tensor is untracked.
      */
-    size_t id() const { return id_; }
+    size_t id() const { return tags_.empty() ? size_t{0} : tags_.back().second; }
+
+    /**
+     * @brief True if this tensor carries a node index on @p tr.
+     * @param tr Trace to query.
+     * @return True if the tensor was tagged on @p tr.
+     */
+    bool has_tag(Trace<dtype>* tr) const {
+        for (const auto& tag : tags_) {
+            if (tag.first == tr) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * @brief Returns this tensor's node index within @p tr.
+     * @param tr Trace to query.
+     * @return The node index on @p tr, or zero if the tensor has no tag there.
+     */
+    size_t id(Trace<dtype>* tr) const {
+        for (const auto& tag : tags_) {
+            if (tag.first == tr) {
+                return tag.second;
+            }
+        }
+        return size_t{0};
+    }
+
+    /**
+     * @brief Records @p id as this tensor's node index on @p tr.
+     *
+     * If the tensor already carries a tag for @p tr it is updated; otherwise a
+     * new one is added. Either way @p tr becomes the primary trace, so @ref trace
+     * and @ref id refer to it.
+     *
+     * @param tr Trace to tag the tensor on.
+     * @param id Node index within @p tr.
+     */
+    void set_tag(Trace<dtype>* tr, size_t id) {
+        for (auto& tag : tags_) {
+            if (tag.first == tr) {
+                tag.second = id;
+                std::swap(tag, tags_.back());
+                return;
+            }
+        }
+        tags_.push_back({tr, id});
+    }
 
     /**
      * @brief Returns an untracked handle to this tensor's storage.
@@ -570,8 +619,7 @@ class Tensor {
      */
     Tensor detach() const {
         Tensor result = *this;
-        result.trace_ = nullptr;
-        result.id_ = 0;
+        result.tags_.clear();
         return result;
     }
 
@@ -832,11 +880,10 @@ class Tensor {
      * @note Writes to the result do not affect this tensor.
      */
     Tensor clone() const {
-        auto storage = std::make_shared<TensorStorage<dtype>>(address_span(), dtype{});
+        auto storage = std::make_shared<Storage<dtype>>(address_span(), dtype{});
         Tensor result{storage, shape_, stride_, 0, device_};
         gather_to(result.data(), stride_);
-        result.trace_ = trace_;
-        result.id_ = id_;
+        result.tags_ = tags_;
         return result;
     }
 
@@ -860,11 +907,10 @@ class Tensor {
             return *this;
         }
 
-        auto storage = std::make_shared<TensorStorage<dtype>>(numel(), dtype{});
+        auto storage = std::make_shared<Storage<dtype>>(numel(), dtype{});
         Tensor result{storage, shape_, 0, device_};
         gather_to(result.data(), result.stride_);
-        result.trace_ = trace_;
-        result.id_ = id_;
+        result.tags_ = tags_;
         return result;
     }
 
@@ -882,7 +928,7 @@ class Tensor {
      *       before it is read, so no indeterminate value escapes.
      */
     template <typename Op> Tensor<dtype> map(Op op) const {
-        auto storage = std::make_shared<TensorStorage<dtype>>(numel());
+        auto storage = std::make_shared<Storage<dtype>>(numel());
         Tensor result{storage, shape_};
 
         const dtype* src = storage_->data() + offset_;
@@ -975,7 +1021,7 @@ Tensor<dtype> Tensor<dtype>::value(std::initializer_list<size_t> shape, dtype va
 template <typename dtype>
     requires std::is_trivially_copyable_v<dtype>
 Tensor<dtype> Tensor<dtype>::value(std::span<const size_t> shape, dtype value) {
-    auto storage = std::make_shared<TensorStorage<dtype>>(extent(shape), value);
+    auto storage = std::make_shared<Storage<dtype>>(extent(shape), value);
     return Tensor{std::move(storage), shape};
 }
 
@@ -1012,7 +1058,7 @@ Tensor<dtype> Tensor<dtype>::uninitialized(std::initializer_list<size_t> shape) 
 template <typename dtype>
     requires std::is_trivially_copyable_v<dtype>
 Tensor<dtype> Tensor<dtype>::uninitialized(std::span<const size_t> shape) {
-    auto storage = std::make_shared<TensorStorage<dtype>>(extent(shape));
+    auto storage = std::make_shared<Storage<dtype>>(extent(shape));
     return Tensor{std::move(storage), shape};
 }
 

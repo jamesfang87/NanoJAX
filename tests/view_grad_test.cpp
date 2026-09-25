@@ -34,6 +34,7 @@ int main() {
     // squeeze(axis) on a tracked tensor backprops identity.
     {
         Trace<double> tr;
+        tr.push();
         auto x = Tensor<double>::value({2, 1, 3}, 4.0);
         tr.add_node(x, nullptr);
         auto y = x.squeeze(1);
@@ -42,17 +43,20 @@ int main() {
         tr.backward(y);
         expect(tr.adjoints_[x.id()].ndim() == 3, "adjoint keeps the squeezed axis");
         expect(all_ones(tr.adjoints_[x.id()]), "squeeze(1) backprops identity");
+        tr.pop();
     }
 
     // unsqueeze(axis) on a tracked tensor backprops identity.
     {
         Trace<double> tr;
+        tr.push();
         auto x = Tensor<double>::value({2, 3}, 4.0);
         tr.add_node(x, nullptr);
         auto y = x.unsqueeze(1);
         expect(y.ndim() == 3 && y.shape()[1] == 1, "unsqueeze(1) shape");
         tr.backward(y);
         expect(all_ones(tr.adjoints_[x.id()]), "unsqueeze(1) backprops identity");
+        tr.pop();
     }
 
     std::cout << (failures == 0 ? "PASS\n" : "FAIL\n");

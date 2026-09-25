@@ -44,6 +44,7 @@ int main() {
     // clone() on a tracked tensor is a tracked identity that adds no node.
     {
         Trace<double> tr;
+        tr.push();
         auto x = make();
         tr.add_node(x, nullptr);
         auto y = x.clone();
@@ -51,11 +52,13 @@ int main() {
         expect(tr.adjoints_.size() == 1, "clone adds no node");
         tr.backward(y);
         expect(all_ones(tr.adjoints_[x.id()]), "clone backprops identity");
+        tr.pop();
     }
 
     // contiguous(true) on a tracked tensor is the same.
     {
         Trace<double> tr;
+        tr.push();
         auto x = make();
         tr.add_node(x, nullptr);
         auto y = x.contiguous(true);
@@ -63,11 +66,13 @@ int main() {
         expect(tr.adjoints_.size() == 1, "contiguous adds no node");
         tr.backward(y);
         expect(all_ones(tr.adjoints_[x.id()]), "contiguous backprops identity");
+        tr.pop();
     }
 
     // contiguous() after a shape-changing view aliases that view's node.
     {
         Trace<double> tr;
+        tr.push();
         auto x = make();
         tr.add_node(x, nullptr);
         auto y = x.transpose().contiguous();
@@ -75,6 +80,7 @@ int main() {
         expect(y.is_tracked(), "contiguous of a view is tracked");
         tr.backward(y);
         expect(all_ones(tr.adjoints_[x.id()]), "transpose.contiguous backprops identity");
+        tr.pop();
     }
 
     // Untracked inputs stay untracked.

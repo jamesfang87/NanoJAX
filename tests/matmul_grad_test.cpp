@@ -17,6 +17,13 @@ namespace {
 
 int failures = 0;
 
+// Pushes a trace for the block's lifetime so operations record on it.
+struct TraceGuard {
+    Trace<double>& tr;
+    explicit TraceGuard(Trace<double>& t) : tr(t) { tr.push(); }
+    ~TraceGuard() { tr.pop(); }
+};
+
 Tensor<double> make(std::initializer_list<size_t> shape, double base) {
     auto tensor = Tensor<double>::value(shape, 0.0);
     for (size_t i = 0; i < tensor.numel(); ++i) {
@@ -64,6 +71,7 @@ void run(const std::string& name, std::initializer_list<size_t> a_shape,
 
     try {
         Trace<double> tr;
+        TraceGuard guard(tr);
         auto a = a0;
         auto b = b0;
         tr.add_node(a, nullptr);

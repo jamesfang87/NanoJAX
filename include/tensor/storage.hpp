@@ -9,20 +9,20 @@
 namespace nanojax {
 
 /**
- * @brief Owns the contiguous backing buffer for a Tensor.
+ * @brief Owns the contiguous data buffer for a Tensor.
  *
  * @tparam dtype Element type. Must be trivially copyable.
  */
 template <typename dtype>
     requires std::is_trivially_copyable_v<dtype>
-class TensorStorage {
+class Storage {
   public:
     /**
      * @brief Allocates room for @p size elements and fills them with @p value.
      * @param size Number of elements to allocate.
      * @param value Value copied into every element.
      */
-    TensorStorage(size_t size, dtype value) : data_(std::make_unique<dtype[]>(size)), size_(size) {
+    Storage(size_t size, dtype value) : data_(std::make_unique<dtype[]>(size)), size_(size) {
         std::fill_n(data_.get(), size, value);
     }
 
@@ -31,8 +31,7 @@ class TensorStorage {
      * @param data Buffer the storage owns; must hold @p size elements.
      * @param size Number of elements in @p data.
      */
-    TensorStorage(std::unique_ptr<dtype[]> data, size_t size)
-        : data_(std::move(data)), size_(size) {}
+    Storage(std::unique_ptr<dtype[]> data, size_t size) : data_(std::move(data)), size_(size) {}
 
     /**
      * @brief Allocates room for @p size elements without initializing them.
@@ -42,8 +41,7 @@ class TensorStorage {
      *
      * @param size Number of elements to allocate.
      */
-    explicit TensorStorage(size_t size)
-        : data_(std::unique_ptr<dtype[]>(new dtype[size])), size_(size) {}
+    explicit Storage(size_t size) : data_(std::unique_ptr<dtype[]>(new dtype[size])), size_(size) {}
 
     /**
      * @brief Returns a pointer to the first element of the buffer.
@@ -70,7 +68,7 @@ class TensorStorage {
     auto clone() const {
         auto data = std::make_unique<dtype[]>(size_);
         std::copy_n(data_.get(), size_, data.get());
-        return TensorStorage{std::move(data), size_};
+        return Storage{std::move(data), size_};
     }
 
   private:

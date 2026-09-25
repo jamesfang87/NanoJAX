@@ -1,9 +1,7 @@
 #pragma once
 
 #include <cassert>
-#include <cmath>
 #include <cstddef>
-#include <utility>
 #include <utility>
 
 #include "grad/trace.hpp"
@@ -14,136 +12,114 @@ namespace vjp {
 
 template <typename dtype>
 Tensor<dtype> unbroadcast(const Tensor<dtype>& g, std::span<const size_t> target) {
-    Tensor<dtype> out = Tensor<dtype>::zeros(target);
-    out.broadcast(g.shape()) += g;
+    Tensor<dtype> out = g;
+
+    for (size_t i = out.ndim(); i > target.size(); --i) {
+        out = sum(out, 0);
+    }
+
+    for (size_t d = 0; d < target.size(); ++d) {
+        if (target[d] == 1 && out.shape()[d] != 1) {
+            out = sum(out, d).unsqueeze(d);
+        }
+    }
+
     return out;
 }
 
-/**
- * @brief Records @c a+b.
- * @param a Left operand.
- * @param b Right operand.
- * @param c Forward sum; tagged as a node when either operand is tracked.
- */
+template <typename dtype> Tensor<dtype> track(const Tensor<dtype>& x) {
+    Tensor<dtype> tagged = x;
+    for (Trace<dtype>* t : Trace<dtype>::stack()) {
+        t->attach(tagged);
+    }
+    return tagged;
+}
+
+template <typename dtype, typename Fn> void record(Tensor<dtype>& result, Fn fn) {
+    for (Trace<dtype>* t : Trace<dtype>::stack()) {
+        t->attach(result);
+        t->backwards(result) = fn;
+    }
+}
+
 template <typename dtype>
 void add(const Tensor<dtype>& a, const Tensor<dtype>& b, Tensor<dtype>& c) {
     if (!a.is_tracked() && !b.is_tracked()) {
         return;
     }
-    assert((!a.is_tracked() || !b.is_tracked() || a.trace() == b.trace()) &&
-           "vjp::add: operands belong to different traces");
 
-    Trace<dtype>* tr = a.is_tracked() ? a.trace() : b.trace();
-    tr->add_node(c, [tr, a, b](size_t self_id) {
-        if (a.is_tracked()) {
-            tr->adjoints_[a.id()] =
-                tr->adjoints_[a.id()] + unbroadcast(tr->adjoints_[self_id], a.shape());
-        }
-        if (b.is_tracked()) {
-            tr->adjoints_[b.id()] =
-                tr->adjoints_[b.id()] + unbroadcast(tr->adjoints_[self_id], b.shape());
-        }
+    Tensor<dtype> a2 = track(a);
+    Tensor<dtype> b2 = track(b);
+    record(c, [a2, b2](Trace<dtype>* tr, size_t self_id) {
+        Tensor<dtype> tmp1 = track(tr->adjoint(self_id));
+        Tensor<dtype> tmp2 = track(tr->adjoint(a2));
+        tr->adjoint(a2) = tmp2 + unbroadcast(tmp1, a2.shape());
+        tmp2 = track(tr->adjoint(b2));
+        tr->adjoint(b2) = tmp2 + unbroadcast(tmp1, b2.shape());
     });
 }
 
-/**
- * @brief Records @c a-b.
- * @param a Left operand.
- * @param b Right operand.
- * @param c Forward difference; tagged as a node when either operand is tracked.
- */
 template <typename dtype>
 void sub(const Tensor<dtype>& a, const Tensor<dtype>& b, Tensor<dtype>& c) {
     if (!a.is_tracked() && !b.is_tracked()) {
         return;
     }
-    assert((!a.is_tracked() || !b.is_tracked() || a.trace() == b.trace()) &&
-           "vjp::sub: operands belong to different traces");
 
-    Trace<dtype>* tr = a.is_tracked() ? a.trace() : b.trace();
-    tr->add_node(c, [tr, a, b](size_t self_id) {
-        if (a.is_tracked()) {
-            tr->adjoints_[a.id()] =
-                tr->adjoints_[a.id()] + unbroadcast(tr->adjoints_[self_id], a.shape());
-        }
-        if (b.is_tracked()) {
-            tr->adjoints_[b.id()] =
-                tr->adjoints_[b.id()] - unbroadcast(tr->adjoints_[self_id], b.shape());
-        }
+    Tensor<dtype> a2 = track(a);
+    Tensor<dtype> b2 = track(b);
+    record(c, [a2, b2](Trace<dtype>* tr, size_t self_id) {
+        Tensor<dtype> tmp1 = track(tr->adjoint(self_id));
+        Tensor<dtype> tmp2 = track(tr->adjoint(a2));
+        tr->adjoint(a2) = tmp2 + unbroadcast(tmp1, a2.shape());
+        tmp2 = track(tr->adjoint(b2));
+        tr->adjoint(b2) = tmp2 - unbroadcast(tmp1, b2.shape());
     });
 }
 
-/**
- * @brief Records @c a*b.
- * @param a Left operand.
- * @param b Right operand.
- * @param c Forward product; tagged as a node when either operand is tracked.
- */
 template <typename dtype>
 void mul(const Tensor<dtype>& a, const Tensor<dtype>& b, Tensor<dtype>& c) {
     if (!a.is_tracked() && !b.is_tracked()) {
         return;
     }
-    assert((!a.is_tracked() || !b.is_tracked() || a.trace() == b.trace()) &&
-           "vjp::mul: operands belong to different traces");
 
-    Trace<dtype>* tr = a.is_tracked() ? a.trace() : b.trace();
-    tr->add_node(c, [tr, a, b](size_t self_id) {
-        if (a.is_tracked()) {
-            tr->adjoints_[a.id()] =
-                tr->adjoints_[a.id()] +
-                unbroadcast(tr->adjoints_[self_id] * b.detach(), a.shape());
-        }
-        if (b.is_tracked()) {
-            tr->adjoints_[b.id()] =
-                tr->adjoints_[b.id()] +
-                unbroadcast(tr->adjoints_[self_id] * a.detach(), b.shape());
-        }
+    Tensor<dtype> a2 = track(a);
+    Tensor<dtype> b2 = track(b);
+    record(c, [a2, b2](Trace<dtype>* tr, size_t self_id) {
+        Tensor<dtype> tmp1 = track(tr->adjoint(self_id));
+        Tensor<dtype> tmp2 = track(tr->adjoint(a2));
+        tr->adjoint(a2) = tmp2 + unbroadcast(tmp1 * b2, a2.shape());
+        tmp2 = track(tr->adjoint(b2));
+        tr->adjoint(b2) = tmp2 + unbroadcast(tmp1 * a2, b2.shape());
     });
 }
 
-/**
- * @brief Records @c a/b.
- * @param a Numerator.
- * @param b Denominator.
- * @param c Forward quotient; tagged as a node when either operand is tracked.
- */
 template <typename dtype>
 void div(const Tensor<dtype>& a, const Tensor<dtype>& b, Tensor<dtype>& c) {
     if (!a.is_tracked() && !b.is_tracked()) {
         return;
     }
-    assert((!a.is_tracked() || !b.is_tracked() || a.trace() == b.trace()) &&
-           "vjp::div: operands belong to different traces");
 
-    Trace<dtype>* tr = a.is_tracked() ? a.trace() : b.trace();
-    tr->add_node(c, [tr, a, b](size_t self_id) {
-        const Tensor<dtype>& bval = b.detach();
-        if (a.is_tracked()) {
-            tr->adjoints_[a.id()] =
-                tr->adjoints_[a.id()] + unbroadcast(tr->adjoints_[self_id] / bval, a.shape());
-        }
-        if (b.is_tracked()) {
-            tr->adjoints_[b.id()] =
-                tr->adjoints_[b.id()] -
-                unbroadcast(tr->adjoints_[self_id] * a.detach() / (bval * bval), b.shape());
-        }
+    Tensor<dtype> a2 = track(a);
+    Tensor<dtype> b2 = track(b);
+    record(c, [a2, b2](Trace<dtype>* tr, size_t self_id) {
+        Tensor<dtype> tmp1 = track(tr->adjoint(self_id));
+        Tensor<dtype> tmp2 = track(tr->adjoint(a2));
+        tr->adjoint(a2) = tmp2 + unbroadcast(tmp1 / b2, a2.shape());
+        tmp2 = track(tr->adjoint(b2));
+        tr->adjoint(b2) = tmp2 - unbroadcast(tmp1 * a2 / (b2 * b2), b2.shape());
     });
 }
 
-/**
- * @brief Records @c -a.
- * @param a Operand.
- * @param b Forward negation; tagged as a node when @p a is tracked.
- */
 template <typename dtype> void neg(const Tensor<dtype>& a, Tensor<dtype>& b) {
     if (!a.is_tracked()) {
         return;
     }
 
-    Trace<dtype>* tr = a.trace();
-    tr->add_node(b, [tr, a](size_t self_id) {
-        tr->adjoints_[a.id()] = tr->adjoints_[a.id()] - tr->adjoints_[self_id];
+    Tensor<dtype> a2 = track(a);
+    record(b, [a2](Trace<dtype>* tr, size_t self_id) {
+        Tensor<dtype> tmp1 = track(tr->adjoint(self_id));
+        Tensor<dtype> tmp2 = track(tr->adjoint(a2));
+        tr->adjoint(a2) = tmp2 - tmp1;
     });
 }
 
@@ -152,9 +128,11 @@ template <typename dtype> void scalar_add(const Tensor<dtype>& a, Tensor<dtype>&
         return;
     }
 
-    Trace<dtype>* tr = a.trace();
-    tr->add_node(b, [tr, a](size_t self_id) {
-        tr->adjoints_[a.id()] = tr->adjoints_[a.id()] + tr->adjoints_[self_id];
+    Tensor<dtype> a2 = track(a);
+    record(b, [a2](Trace<dtype>* tr, size_t self_id) {
+        Tensor<dtype> tmp1 = track(tr->adjoint(self_id));
+        Tensor<dtype> tmp2 = track(tr->adjoint(a2));
+        tr->adjoint(a2) = tmp2 + tmp1;
     });
 }
 
@@ -163,9 +141,11 @@ template <typename dtype> void lhs_scalar_sub(const Tensor<dtype>& a, Tensor<dty
         return;
     }
 
-    Trace<dtype>* tr = a.trace();
-    tr->add_node(b, [tr, a](size_t self_id) {
-        tr->adjoints_[a.id()] = tr->adjoints_[a.id()] + tr->adjoints_[self_id];
+    Tensor<dtype> a2 = track(a);
+    record(b, [a2](Trace<dtype>* tr, size_t self_id) {
+        Tensor<dtype> tmp1 = track(tr->adjoint(self_id));
+        Tensor<dtype> tmp2 = track(tr->adjoint(a2));
+        tr->adjoint(a2) = tmp2 + tmp1;
     });
 }
 
@@ -174,9 +154,11 @@ template <typename dtype> void rhs_scalar_sub(const Tensor<dtype>& a, Tensor<dty
         return;
     }
 
-    Trace<dtype>* tr = a.trace();
-    tr->add_node(b, [tr, a](size_t self_id) {
-        tr->adjoints_[a.id()] = tr->adjoints_[a.id()] - tr->adjoints_[self_id];
+    Tensor<dtype> a2 = track(a);
+    record(b, [a2](Trace<dtype>* tr, size_t self_id) {
+        Tensor<dtype> tmp1 = track(tr->adjoint(self_id));
+        Tensor<dtype> tmp2 = track(tr->adjoint(a2));
+        tr->adjoint(a2) = tmp2 - tmp1;
     });
 }
 
@@ -185,9 +167,11 @@ template <typename dtype> void scalar_mul(const Tensor<dtype>& a, dtype b, Tenso
         return;
     }
 
-    Trace<dtype>* tr = a.trace();
-    tr->add_node(c, [tr, a, b](size_t self_id) {
-        tr->adjoints_[a.id()] = tr->adjoints_[a.id()] + tr->adjoints_[self_id] * b;
+    Tensor<dtype> a2 = track(a);
+    record(c, [a2, b](Trace<dtype>* tr, size_t self_id) {
+        Tensor<dtype> tmp1 = track(tr->adjoint(self_id));
+        Tensor<dtype> tmp2 = track(tr->adjoint(a2));
+        tr->adjoint(a2) = tmp2 + tmp1 * b;
     });
 }
 
@@ -196,9 +180,11 @@ template <typename dtype> void lhs_scalar_div(const Tensor<dtype>& a, dtype b, T
         return;
     }
 
-    Trace<dtype>* tr = a.trace();
-    tr->add_node(c, [tr, a, b](size_t self_id) {
-        tr->adjoints_[a.id()] = tr->adjoints_[a.id()] + tr->adjoints_[self_id] / b;
+    Tensor<dtype> a2 = track(a);
+    record(c, [a2, b](Trace<dtype>* tr, size_t self_id) {
+        Tensor<dtype> tmp1 = track(tr->adjoint(self_id));
+        Tensor<dtype> tmp2 = track(tr->adjoint(a2));
+        tr->adjoint(a2) = tmp2 + tmp1 / b;
     });
 }
 
@@ -207,10 +193,11 @@ template <typename dtype> void rhs_scalar_div(dtype a, const Tensor<dtype>& b, T
         return;
     }
 
-    Trace<dtype>* tr = b.trace();
-    tr->add_node(c, [tr, b, a](size_t self_id) {
-        const Tensor<dtype>& bval = b.detach();
-        tr->adjoints_[b.id()] = tr->adjoints_[b.id()] - tr->adjoints_[self_id] * a / (bval * bval);
+    Tensor<dtype> b2 = track(b);
+    record(c, [b2, a](Trace<dtype>* tr, size_t self_id) {
+        Tensor<dtype> tmp1 = track(tr->adjoint(self_id));
+        Tensor<dtype> tmp2 = track(tr->adjoint(b2));
+        tr->adjoint(b2) = tmp2 - tmp1 * a / (b2 * b2);
     });
 }
 
@@ -219,9 +206,11 @@ template <typename dtype> void exp(const Tensor<dtype>& a, Tensor<dtype>& c) {
         return;
     }
 
-    Trace<dtype>* tr = a.trace();
-    tr->add_node(c, [tr, a, c](size_t self_id) {
-        tr->adjoints_[a.id()] = tr->adjoints_[a.id()] + tr->adjoints_[self_id] * c;
+    Tensor<dtype> a2 = track(a);
+    record(c, [a2](Trace<dtype>* tr, size_t self_id) {
+        Tensor<dtype> tmp1 = track(tr->adjoint(self_id));
+        Tensor<dtype> tmp2 = track(tr->adjoint(a2));
+        tr->adjoint(a2) = tmp2 + tmp1 * exp(a2);
     });
 }
 
@@ -230,9 +219,11 @@ template <typename dtype> void log(const Tensor<dtype>& a, Tensor<dtype>& c) {
         return;
     }
 
-    Trace<dtype>* tr = a.trace();
-    tr->add_node(c, [tr, a](size_t self_id) {
-        tr->adjoints_[a.id()] = tr->adjoints_[a.id()] + tr->adjoints_[self_id] / a.detach();
+    Tensor<dtype> a2 = track(a);
+    record(c, [a2](Trace<dtype>* tr, size_t self_id) {
+        Tensor<dtype> tmp1 = track(tr->adjoint(self_id));
+        Tensor<dtype> tmp2 = track(tr->adjoint(a2));
+        tr->adjoint(a2) = tmp2 + tmp1 / a2;
     });
 }
 
@@ -241,9 +232,11 @@ template <typename dtype> void sqrt(const Tensor<dtype>& a, Tensor<dtype>& c) {
         return;
     }
 
-    Trace<dtype>* tr = a.trace();
-    tr->add_node(c, [tr, a, c](size_t self_id) {
-        tr->adjoints_[a.id()] = tr->adjoints_[a.id()] + tr->adjoints_[self_id] / (c * dtype{2});
+    Tensor<dtype> a2 = track(a);
+    record(c, [a2](Trace<dtype>* tr, size_t self_id) {
+        Tensor<dtype> tmp1 = track(tr->adjoint(self_id));
+        Tensor<dtype> tmp2 = track(tr->adjoint(a2));
+        tr->adjoint(a2) = tmp2 + tmp1 / (sqrt(a2) * dtype{2});
     });
 }
 
@@ -252,12 +245,11 @@ template <typename dtype> void pow(const Tensor<dtype>& a, dtype exponent, Tenso
         return;
     }
 
-    Trace<dtype>* tr = a.trace();
-    tr->add_node(c, [tr, a, exponent](size_t self_id) {
-        auto derivative = a.detach().map(
-            [exponent](dtype element) { return std::pow(element, exponent - dtype{1}); });
-        tr->adjoints_[a.id()] =
-            tr->adjoints_[a.id()] + (tr->adjoints_[self_id] * exponent) * derivative;
+    Tensor<dtype> a2 = track(a);
+    record(c, [a2, exponent](Trace<dtype>* tr, size_t self_id) {
+        Tensor<dtype> tmp1 = track(tr->adjoint(self_id));
+        Tensor<dtype> tmp2 = track(tr->adjoint(a2));
+        tr->adjoint(a2) = tmp2 + (tmp1 * exponent) * pow(a2, exponent - dtype{1});
     });
 }
 
@@ -266,12 +258,14 @@ template <typename dtype> void abs(const Tensor<dtype>& a, Tensor<dtype>& c) {
         return;
     }
 
-    Trace<dtype>* tr = a.trace();
-    tr->add_node(c, [tr, a](size_t self_id) {
-        auto sign = a.detach().map([](dtype element) {
+    Tensor<dtype> a2 = track(a);
+    record(c, [a2](Trace<dtype>* tr, size_t self_id) {
+        Tensor<dtype> tmp1 = track(tr->adjoint(self_id));
+        Tensor<dtype> tmp2 = track(tr->adjoint(a2));
+        auto sign = a2.detach().map([](dtype element) {
             return element > dtype{0} ? dtype{1} : (element < dtype{0} ? dtype{-1} : dtype{0});
         });
-        tr->adjoints_[a.id()] = tr->adjoints_[a.id()] + tr->adjoints_[self_id] * sign;
+        tr->adjoint(a2) = tmp2 + tmp1 * sign;
     });
 }
 
@@ -280,11 +274,13 @@ template <typename dtype> void relu(const Tensor<dtype>& a, Tensor<dtype>& c) {
         return;
     }
 
-    Trace<dtype>* tr = a.trace();
-    tr->add_node(c, [tr, a](size_t self_id) {
-        auto mask = a.detach().map(
-            [](dtype element) { return element > dtype{0} ? dtype{1} : dtype{0}; });
-        tr->adjoints_[a.id()] = tr->adjoints_[a.id()] + tr->adjoints_[self_id] * mask;
+    Tensor<dtype> a2 = track(a);
+    record(c, [a2](Trace<dtype>* tr, size_t self_id) {
+        Tensor<dtype> tmp1 = track(tr->adjoint(self_id));
+        Tensor<dtype> tmp2 = track(tr->adjoint(a2));
+        auto mask =
+            a2.detach().map([](dtype element) { return element > dtype{0} ? dtype{1} : dtype{0}; });
+        tr->adjoint(a2) = tmp2 + tmp1 * mask;
     });
 }
 
@@ -293,9 +289,12 @@ template <typename dtype> void sigmoid(const Tensor<dtype>& a, Tensor<dtype>& c)
         return;
     }
 
-    Trace<dtype>* tr = a.trace();
-    tr->add_node(c, [tr, a, c](size_t self_id) {
-        tr->adjoints_[a.id()] = tr->adjoints_[a.id()] + tr->adjoints_[self_id] * c * (dtype{1} - c);
+    Tensor<dtype> a2 = track(a);
+    record(c, [a2](Trace<dtype>* tr, size_t self_id) {
+        Tensor<dtype> tmp1 = track(tr->adjoint(self_id));
+        Tensor<dtype> tmp2 = track(tr->adjoint(a2));
+        Tensor<dtype> y = sigmoid(a2);
+        tr->adjoint(a2) = tmp2 + tmp1 * y * (dtype{1} - y);
     });
 }
 
@@ -304,9 +303,12 @@ template <typename dtype> void tanh(const Tensor<dtype>& a, Tensor<dtype>& c) {
         return;
     }
 
-    Trace<dtype>* tr = a.trace();
-    tr->add_node(c, [tr, a, c](size_t self_id) {
-        tr->adjoints_[a.id()] = tr->adjoints_[a.id()] + tr->adjoints_[self_id] * (dtype{1} - c * c);
+    Tensor<dtype> a2 = track(a);
+    record(c, [a2](Trace<dtype>* tr, size_t self_id) {
+        Tensor<dtype> tmp1 = track(tr->adjoint(self_id));
+        Tensor<dtype> tmp2 = track(tr->adjoint(a2));
+        Tensor<dtype> y = tanh(a2);
+        tr->adjoint(a2) = tmp2 + tmp1 * (dtype{1} - y * y);
     });
 }
 
@@ -315,9 +317,11 @@ template <typename dtype> void sum(const Tensor<dtype>& a, Tensor<dtype>& b) {
         return;
     }
 
-    Trace<dtype>* tr = a.trace();
-    tr->add_node(b, [tr, a](size_t self_id) {
-        tr->adjoints_[a.id()] += tr->adjoints_[self_id].broadcast(a.shape());
+    Tensor<dtype> a2 = track(a);
+    record(b, [a2](Trace<dtype>* tr, size_t self_id) {
+        Tensor<dtype> tmp1 = track(tr->adjoint(self_id));
+        Tensor<dtype> tmp2 = track(tr->adjoint(a2));
+        tr->adjoint(a2) = tmp2 + tmp1.broadcast(a2.shape());
     });
 }
 
@@ -326,22 +330,26 @@ template <typename dtype> void sum(const Tensor<dtype>& a, size_t axis, Tensor<d
         return;
     }
 
-    Trace<dtype>* tr = a.trace();
-    tr->add_node(b, [tr, a, axis](size_t self_id) {
-        tr->adjoints_[a.id()] += tr->adjoints_[self_id].unsqueeze(axis).broadcast(a.shape());
+    Tensor<dtype> a2 = track(a);
+    record(b, [a2, axis](Trace<dtype>* tr, size_t self_id) {
+        Tensor<dtype> tmp1 = track(tr->adjoint(self_id));
+        Tensor<dtype> tmp2 = track(tr->adjoint(a2));
+        tr->adjoint(a2) = tmp2 + tmp1.unsqueeze(axis).broadcast(a2.shape());
     });
 }
+
 template <typename dtype> void max(const Tensor<dtype>& a, size_t flat_idx, Tensor<dtype>& b) {
     if (!a.is_tracked()) {
         return;
     }
 
-    Trace<dtype>* tr = a.trace();
-    tr->add_node(b, [tr, a, flat_idx](size_t self_id) {
-        Tensor<dtype> onehot = Tensor<dtype>::zeros_like(a);
+    Tensor<dtype> a2 = track(a);
+    record(b, [a2, flat_idx](Trace<dtype>* tr, size_t self_id) {
+        Tensor<dtype> tmp1 = track(tr->adjoint(self_id));
+        Tensor<dtype> tmp2 = track(tr->adjoint(a2));
+        Tensor<dtype> onehot = Tensor<dtype>::zeros_like(a2);
         onehot.data()[flat_idx] = dtype{1};
-
-        tr->adjoints_[a.id()] += tr->adjoints_[self_id] * onehot;
+        tr->adjoint(a2) = tmp2 + tmp1 * onehot;
     });
 }
 
@@ -350,12 +358,13 @@ template <typename dtype> void min(const Tensor<dtype>& a, size_t flat_idx, Tens
         return;
     }
 
-    Trace<dtype>* tr = a.trace();
-    tr->add_node(b, [tr, a, flat_idx](size_t self_id) {
-        Tensor<dtype> onehot = Tensor<dtype>::zeros_like(a);
+    Tensor<dtype> a2 = track(a);
+    record(b, [a2, flat_idx](Trace<dtype>* tr, size_t self_id) {
+        Tensor<dtype> tmp1 = track(tr->adjoint(self_id));
+        Tensor<dtype> tmp2 = track(tr->adjoint(a2));
+        Tensor<dtype> onehot = Tensor<dtype>::zeros_like(a2);
         onehot.data()[flat_idx] = dtype{1};
-
-        tr->adjoints_[a.id()] += tr->adjoints_[self_id] * onehot;
+        tr->adjoint(a2) = tmp2 + tmp1 * onehot;
     });
 }
 
@@ -364,9 +373,11 @@ template <typename dtype> void reshape(const Tensor<dtype>& a, Tensor<dtype>& re
         return;
     }
 
-    Trace<dtype>* tr = a.trace();
-    tr->add_node(result, [tr, a](size_t self_id) {
-        tr->adjoints_[a.id()] += tr->adjoints_[self_id].reshape(a.shape());
+    Tensor<dtype> a2 = track(a);
+    record(result, [a2](Trace<dtype>* tr, size_t self_id) {
+        Tensor<dtype> tmp1 = track(tr->adjoint(self_id));
+        Tensor<dtype> tmp2 = track(tr->adjoint(a2));
+        tr->adjoint(a2) = tmp2 + tmp1.reshape(a2.shape());
     });
 }
 
@@ -375,9 +386,11 @@ template <typename dtype> void transpose(const Tensor<dtype>& a, Tensor<dtype>& 
         return;
     }
 
-    Trace<dtype>* tr = a.trace();
-    tr->add_node(result, [tr, a](size_t self_id) {
-        tr->adjoints_[a.id()] += tr->adjoints_[self_id].transpose();
+    Tensor<dtype> a2 = track(a);
+    record(result, [a2](Trace<dtype>* tr, size_t self_id) {
+        Tensor<dtype> tmp1 = track(tr->adjoint(self_id));
+        Tensor<dtype> tmp2 = track(tr->adjoint(a2));
+        tr->adjoint(a2) = tmp2 + tmp1.transpose();
     });
 }
 
@@ -392,9 +405,11 @@ void permute(const Tensor<dtype>& a, Tensor<dtype>& result, std::span<const size
         inverse[axes[i]] = i;
     }
 
-    Trace<dtype>* tr = a.trace();
-    tr->add_node(result, [tr, a, inverse](size_t self_id) {
-        tr->adjoints_[a.id()] += tr->adjoints_[self_id].permute(std::span<const size_t>(inverse));
+    Tensor<dtype> a2 = track(a);
+    record(result, [a2, inverse](Trace<dtype>* tr, size_t self_id) {
+        Tensor<dtype> tmp1 = track(tr->adjoint(self_id));
+        Tensor<dtype> tmp2 = track(tr->adjoint(a2));
+        tr->adjoint(a2) = tmp2 + tmp1.permute(std::span<const size_t>(inverse));
     });
 }
 
@@ -403,9 +418,11 @@ template <typename dtype> void squeeze(const Tensor<dtype>& a, Tensor<dtype>& re
         return;
     }
 
-    Trace<dtype>* tr = a.trace();
-    tr->add_node(result, [tr, a](size_t self_id) {
-        tr->adjoints_[a.id()] += tr->adjoints_[self_id].reshape(a.shape());
+    Tensor<dtype> a2 = track(a);
+    record(result, [a2](Trace<dtype>* tr, size_t self_id) {
+        Tensor<dtype> tmp1 = track(tr->adjoint(self_id));
+        Tensor<dtype> tmp2 = track(tr->adjoint(a2));
+        tr->adjoint(a2) = tmp2 + tmp1.reshape(a2.shape());
     });
 }
 
@@ -414,9 +431,11 @@ template <typename dtype> void unsqueeze(const Tensor<dtype>& a, Tensor<dtype>& 
         return;
     }
 
-    Trace<dtype>* tr = a.trace();
-    tr->add_node(result, [tr, a](size_t self_id) {
-        tr->adjoints_[a.id()] += tr->adjoints_[self_id].reshape(a.shape());
+    Tensor<dtype> a2 = track(a);
+    record(result, [a2](Trace<dtype>* tr, size_t self_id) {
+        Tensor<dtype> tmp1 = track(tr->adjoint(self_id));
+        Tensor<dtype> tmp2 = track(tr->adjoint(a2));
+        tr->adjoint(a2) = tmp2 + tmp1.reshape(a2.shape());
     });
 }
 
@@ -425,14 +444,15 @@ template <typename dtype> void broadcast(const Tensor<dtype>& a, Tensor<dtype>& 
         return;
     }
 
-    Trace<dtype>* tr = a.trace();
-    tr->add_node(result, [tr, a](size_t self_id) {
-        tr->adjoints_[a.id()] += vjp::unbroadcast(tr->adjoints_[self_id], a.shape());
+    Tensor<dtype> a2 = track(a);
+    record(result, [a2](Trace<dtype>* tr, size_t self_id) {
+        Tensor<dtype> tmp1 = track(tr->adjoint(self_id));
+        Tensor<dtype> tmp2 = track(tr->adjoint(a2));
+        tr->adjoint(a2) = tmp2 + vjp::unbroadcast(tmp1, a2.shape());
     });
 }
 
-template <typename dtype>
-Tensor<dtype> transpose_last_two(const Tensor<dtype>& tensor) {
+template <typename dtype> Tensor<dtype> transpose_last_two(const Tensor<dtype>& tensor) {
     boost::container::small_vector<size_t, 4> axes;
     axes.reserve(tensor.ndim());
     for (size_t i = 0; i < tensor.ndim(); ++i) {
@@ -460,20 +480,15 @@ void matmul(const Tensor<dtype>& a, const Tensor<dtype>& b, Tensor<dtype>& c) {
     if (!a.is_tracked() && !b.is_tracked()) {
         return;
     }
-    assert((!a.is_tracked() || !b.is_tracked() || a.trace() == b.trace()) &&
-           "vjp::matmul: operands belong to different traces");
 
-    Trace<dtype>* tr = a.is_tracked() ? a.trace() : b.trace();
-    tr->add_node(c, [tr, a, b](size_t self_id) {
-        if (a.is_tracked()) {
-            tr->adjoints_[a.id()] += unbatch(
-                matmul(tr->adjoints_[self_id], transpose_last_two(b.detach())), a.shape());
-        }
-
-        if (b.is_tracked()) {
-            tr->adjoints_[b.id()] += unbatch(
-                matmul(transpose_last_two(a.detach()), tr->adjoints_[self_id]), b.shape());
-        }
+    Tensor<dtype> a2 = track(a);
+    Tensor<dtype> b2 = track(b);
+    record(c, [a2, b2](Trace<dtype>* tr, size_t self_id) {
+        Tensor<dtype> tmp1 = track(tr->adjoint(self_id));
+        Tensor<dtype> tmp2 = track(tr->adjoint(a2));
+        tr->adjoint(a2) = tmp2 + unbatch(matmul(tmp1, transpose_last_two(b2.detach())), a2.shape());
+        tmp2 = track(tr->adjoint(b2));
+        tr->adjoint(b2) = tmp2 + unbatch(matmul(transpose_last_two(a2.detach()), tmp1), b2.shape());
     });
 }
 
