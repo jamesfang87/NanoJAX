@@ -1,5 +1,5 @@
 # NanoJAX
-NanoJAX is an autodiff (automatic differentiation) library for Python supporting hardware acceleration using both BLAS and CUDA. It uses a C++ core to support fast autodiff while maintaining the flexibility, simplicity, and development speed of Python. In addition, there is also a small machine learning library featuring certain layers like MLPs, CNNs, and activation functions such as ReLU, Sigmoid, and more.
+NanoJAX is an autodiff (automatic differentiation) library for Python supporting hardware acceleration using both BLAS and CUDA. It uses a C++ core to support fast autodiff while maintaining the flexibility, simplicity, and development speed of Python. In addition, there is also a small machine learning library featuring certain layers like MLPs, and activation functions such as ReLU, Sigmoid, and more.
 
 # Introduction
 The syntax of NanoJAX is very similar compared to JAX:
@@ -32,4 +32,4 @@ g = df(3.0);
 
 
 # Notes
-Everything else is implemented except for CUDA support; I forgot to bring my system with CUDA to college, so hardware acceleration with CUDA will likely have to wait until the next time I go home, since I do not have access to a system with CUDA installed. 
+Everything else is implemented except for CUDA support; I forgot to bring my system with CUDA to college, so hardware acceleration with CUDA will likely have to wait until the next time I go home, since I do not have access to a system with CUDA installed. I also forgot to implement strided views on Tensors, so CNNs will have to wait too. However, I will likely implement them with im2col rather an strided views.
