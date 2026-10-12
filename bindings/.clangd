@@ -1,0 +1,13 @@
+CompileFlags:
+  Add:
+    - -std=c++23
+    - -I/Users/jamesfang/Code/Tensor/include
+    - -I/opt/homebrew/include
+    - -I/Users/jamesfang/Code/Tensor/.venv/lib/python3.14/site-packages/nanobind/include
+    - -I/Users/jamesfang/Code/Tensor/.venv/lib/python3.14/site-packages/nanobind/src
+    - -I/Users/jamesfang/Code/Tensor/.venv/lib/python3.14/site-packages/nanobind/ext/robin_map/include
+    - -I/opt/homebrew/opt/python@3.14/Frameworks/Python.framework/Versions/3.14/include/python3.14
+    - -DNANOJAX_HAVE_CBLAS
+    - -DACCELERATE_NEW_LAPACK
+    - -fvisibility=hidden
+    - -fno-strict-aliasing

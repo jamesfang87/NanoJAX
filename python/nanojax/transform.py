@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from typing import Tuple
 
 # This is some weird thing with nanobind where the module structure is weird
 # maybe I just did it wrong...
@@ -10,63 +11,54 @@ from . import _tensor as nj
 TensorCallable = Callable[..., nj.Tensor]
 
 
-def flatten(tree) -> list[nj.Tensor]:
-    """Collect the Tensors in a nested structure of lists and tuples.
+def tree_map(f, tree):
+    if tree is None:
+        return None
+    if isinstance(tree, nj.Tensor):
+        return f(tree)
+    if isinstance(tree, tuple):
+        children = [tree_map(f, child) for child in tree]
+        if type(tree) is tuple:
+            return tuple(children)
+        return type(tree)(*children)
+    if isinstance(tree, list):
+        return [tree_map(f, child) for child in tree]
+    if callable(getattr(tree, "named_parameters", None)):
+        return tree.with_parameters(
+            {
+                name: tree_map(f, child)
+                for name, child in tree.named_parameters().items()
+            }
+        )
+    raise TypeError(f"grad: unsupported leaf of type {type(tree).__name__}")
+
+
+def flatten(node):
+    """Collect the Tensors in a nested structure of lists, tuples, and modules.
 
     Args:
-        tree: A Tensor, or a nested list/tuple of Tensors; None entries are skipped.
+        tree: A Tensor, or a nested structure of Tensors, lists, tuples, and
+            objects exposing @c named_parameters; None entries are skipped.
 
     Returns:
         list[Tensor]: the leaves in left-to-right order.
     """
-    leaves: list[nj.Tensor] = []
-
-    def walk(node) -> None:
-        if node is None:
-            return
-        if isinstance(node, nj.Tensor):
-            leaves.append(node)
-        elif isinstance(node, (list, tuple)):
-            for child in node:
-                walk(child)
-        else:
-            raise TypeError(f"grad: unsupported leaf of type {type(node).__name__}")
-
-    walk(tree)
-    return leaves
-
-
-def unflatten_like(template, values):
-    """Rebuild a structure shaped like @p template from @p values.
-
-    Args:
-        template: The nested structure whose shape is mirrored.
-        values: Iterable of leaves consumed in the same order as @ref flatten.
-
-    Returns:
-        A structure shaped like @p template, holding @p values.
-    """
-    it = iter(values)
-
-    def build(node):
-        if node is None:
-            return None
-        if isinstance(node, nj.Tensor):
-            return next(it)
-        if isinstance(node, tuple):
-            children = [build(child) for child in node]
-            if type(node) is tuple:
-                return tuple(children)
-            return type(node)(*children)
-        if isinstance(node, list):
-            return [build(child) for child in node]
+    if node is None:
+        return
+    if isinstance(node, nj.Tensor):
+        yield node
+    elif isinstance(node, (list, tuple)):
+        for child in node:
+            yield from flatten(child)
+    elif callable(getattr(node, "named_parameters", None)):
+        for child in node.named_parameters().values():
+            yield from flatten(child)
+    else:
         raise TypeError(f"grad: unsupported leaf of type {type(node).__name__}")
-
-    return build(template)
 
 
 def value_and_grad(
-    fun: TensorCallable, argnum: int = 0
+    f: TensorCallable, argnum: int | Tuple[int] = 0
 ) -> Callable[..., tuple[nj.Tensor, nj.Tensor]]:
     """Differentiate @p fun with respect to argument @p argnum.
 
@@ -80,28 +72,40 @@ def value_and_grad(
     """
 
     def grad_fn(*args):
-        target = args[argnum]
-        leaves = flatten(target)
-        if not leaves:
+        # Ensure argnums is a tuple
+        argnums = (argnum,) if isinstance(argnum, int) else argnum
+
+        # Get the args which are to be differentiated w.r.t
+        targets = tuple(args[i] for i in argnums)
+
+        # Flatten the targets
+        ref = next(flatten(targets), None)
+        if ref is None:
             raise ValueError("value_and_grad: no Tensor arguments to differentiate")
 
-        with nj.Trace(leaves[0].dtype):
-            attached = [nj.attach(leaf) for leaf in leaves]
-            traced_target = unflatten_like(target, attached)
+        with nj.Trace(ref.dtype):
+            # Attach each target to the Trace
+            attached_targets = tree_map(nj.attach, targets)
 
+            # Change the differentiated args to the targets
             args_as_list = list(args)
-            args_as_list[argnum] = traced_target
+            for i, j in enumerate(argnums):
+                args_as_list[j] = attached_targets[i]
 
-            out = fun(*args_as_list)
+            # Forward pass to generate gradients
+            out = f(*args_as_list)
             if out.numel() != 1:
                 raise ValueError(
                     "`grad` requires the provided function to have a scalar output"
                 )
 
+            # Extract gradients
             nj.backward(out)
-            grads = [nj.adjoint(leaf) for leaf in attached]
+            grads = tree_map(nj.adjoint, attached_targets)
 
-        return nj.stop_gradient(out), unflatten_like(target, grads)
+        return nj.stop_gradient(out), (
+            grads[0] if isinstance(argnum, int) else tuple(grads)
+        )
 
     return grad_fn
 

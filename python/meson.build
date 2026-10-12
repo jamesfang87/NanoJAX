@@ -24,7 +24,9 @@ py.install_sources(
 
 py.install_sources(
   'nanojax/nn/layers/module/__init__.py',
+  'nanojax/nn/layers/module/attn.py',
   'nanojax/nn/layers/module/mlp.py',
+  'nanojax/nn/layers/module/module.py',
   subdir: 'nanojax/nn/layers/module',
 )
 

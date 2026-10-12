@@ -13,7 +13,7 @@ from .activations import (
     tanh,
 )
 from .data import DataLoader, Dataset, MNISTDataset, Sample
-from .layers import MLP, MLPParams
+from .layers import MLP, MLPParams, Module, MultiHeadAttention
 from .loss import cross_entropy, mse_loss
 from .optimizers import SGD, Optimizer
 
@@ -40,6 +40,8 @@ __all__ = [
     "mse_loss",
     "MLP",
     "MLPParams",
+    "Module",
+    "MultiHeadAttention",
     "SGD",
     "Optimizer",
 ]

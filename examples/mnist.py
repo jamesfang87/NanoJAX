@@ -1,34 +1,28 @@
 from __future__ import annotations
 
-import random
 import time
 
 import nanojax as nj
 from nanojax.nn.activations import relu, softmax
 from nanojax.nn.data import DataLoader
 from nanojax.nn.data.examples import MNISTDataset
-from nanojax.nn.layers.module import MLP, MLPParams
+from nanojax.nn.layers.module import MLP, Module
 from nanojax.nn.loss import cross_entropy
 from nanojax.nn.optimizers import SGD
 
 
-def init_layer(in_features: int, out_features: int, rng: random.Random) -> MLPParams:
-    limit = (6.0 / (in_features + out_features)) ** 0.5
-    weight = nj.Tensor(
-        [
-            [rng.uniform(-limit, limit) for _ in range(out_features)]
-            for _ in range(in_features)
-        ]
-    )
-    return MLPParams(weight, nj.zeros([out_features]))
+class Net(Module):
+    def __init__(self, in_features: int, hidden_features: int, out_features: int):
+        self.fc1 = MLP(in_features, hidden_features, seed=0)
+        self.fc2 = MLP(hidden_features, out_features, seed=1)
+
+    def forward(self, x: nj.Tensor) -> nj.Tensor:
+        return self.fc2(relu(self.fc1(x)))
 
 
 def make_loss(x: nj.Tensor, y: nj.Tensor):
-    def loss(model) -> nj.Tensor:
-        layer1, layer2 = model
-        hidden = relu(MLP.apply(layer1, x))
-        logits = MLP.apply(layer2, hidden)
-        return cross_entropy(softmax(logits), y) / x.shape[0]
+    def loss(model: Module) -> nj.Tensor:
+        return cross_entropy(softmax(model(x)), y) / x.shape[0]
 
     return loss
 
@@ -37,12 +31,11 @@ def argmax_rows(tensor: nj.Tensor) -> list[int]:
     return [row.index(max(row)) for row in tensor.tolist()]
 
 
-def accuracy(model, loader: DataLoader) -> float:
-    layer1, layer2 = model
+def accuracy(model: Module, loader: DataLoader) -> float:
     correct = 0
     total = 0
     for x, y in loader:
-        logits = MLP.apply(layer2, relu(MLP.apply(layer1, x)))
+        logits = model(x)
         predictions = argmax_rows(logits)
         labels = argmax_rows(y)
         correct += sum(p == t for p, t in zip(predictions, labels))
@@ -60,8 +53,7 @@ def main() -> None:
     train_loader = DataLoader(train_set, batch_size, shuffle=True, seed=0)
     test_loader = DataLoader(test_set, 256, shuffle=False)
 
-    rng = random.Random(0)
-    model = (init_layer(28 * 28, 128, rng), init_layer(128, 10, rng))
+    model = Net(28 * 28, 128, 10)
     optimizer = SGD(learning_rate)
 
     for epoch in range(1, epochs + 1):
@@ -71,9 +63,7 @@ def main() -> None:
 
         for x, y in train_loader:
             loss_value, grads = nj.value_and_grad(make_loss(x, y))(model)
-            model = tuple(
-                optimizer.step(params, grad) for params, grad in zip(model, grads)
-            )
+            model = optimizer.step(model, grads)
 
             running_loss += loss_value.item()
             batches += 1
