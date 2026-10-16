@@ -10,23 +10,6 @@
 namespace nanojax {
 namespace vjp {
 
-template <typename dtype>
-Tensor<dtype> unbroadcast(const Tensor<dtype>& g, std::span<const size_t> target) {
-    Tensor<dtype> out = g;
-
-    for (size_t i = out.ndim(); i > target.size(); --i) {
-        out = sum(out, 0);
-    }
-
-    for (size_t d = 0; d < target.size(); ++d) {
-        if (target[d] == 1 && out.shape()[d] != 1) {
-            out = sum(out, d).unsqueeze(d);
-        }
-    }
-
-    return out;
-}
-
 template <typename dtype> Tensor<dtype> track(const Tensor<dtype>& x) {
     Tensor<dtype> tagged = x;
     for (Trace<dtype>* t : Trace<dtype>::stack()) {
@@ -41,6 +24,24 @@ template <typename dtype, typename Fn> void record(Tensor<dtype>& result, Fn fn)
         t->backwards(result) = fn;
     }
 }
+namespace detail {
+template <typename dtype>
+Tensor<dtype> unbroadcast(const Tensor<dtype>& out, std::span<const size_t> target) {
+    Tensor<dtype> out2 = out;
+
+    for (size_t i = out2.ndim(); i > target.size(); --i) {
+        out2 = sum(out2, 0);
+    }
+
+    for (size_t d = 0; d < target.size(); ++d) {
+        if (target[d] == 1 && out2.shape()[d] != 1) {
+            out2 = sum(out2, d).unsqueeze(d);
+        }
+    }
+
+    return out2;
+}
+} // namespace detail
 
 template <typename dtype>
 void add(const Tensor<dtype>& a, const Tensor<dtype>& b, Tensor<dtype>& c) {
@@ -53,9 +54,9 @@ void add(const Tensor<dtype>& a, const Tensor<dtype>& b, Tensor<dtype>& c) {
     record(c, [a2, b2](Trace<dtype>* tr, size_t self_id) {
         Tensor<dtype> tmp1 = track(tr->adjoint(self_id));
         Tensor<dtype> tmp2 = track(tr->adjoint(a2));
-        tr->adjoint(a2) = tmp2 + unbroadcast(tmp1, a2.shape());
+        tr->adjoint(a2) = tmp2 + detail::unbroadcast(tmp1, a2.shape());
         tmp2 = track(tr->adjoint(b2));
-        tr->adjoint(b2) = tmp2 + unbroadcast(tmp1, b2.shape());
+        tr->adjoint(b2) = tmp2 + detail::unbroadcast(tmp1, b2.shape());
     });
 }
 
@@ -70,9 +71,9 @@ void sub(const Tensor<dtype>& a, const Tensor<dtype>& b, Tensor<dtype>& c) {
     record(c, [a2, b2](Trace<dtype>* tr, size_t self_id) {
         Tensor<dtype> tmp1 = track(tr->adjoint(self_id));
         Tensor<dtype> tmp2 = track(tr->adjoint(a2));
-        tr->adjoint(a2) = tmp2 + unbroadcast(tmp1, a2.shape());
+        tr->adjoint(a2) = tmp2 + detail::unbroadcast(tmp1, a2.shape());
         tmp2 = track(tr->adjoint(b2));
-        tr->adjoint(b2) = tmp2 - unbroadcast(tmp1, b2.shape());
+        tr->adjoint(b2) = tmp2 - detail::unbroadcast(tmp1, b2.shape());
     });
 }
 
@@ -87,9 +88,9 @@ void mul(const Tensor<dtype>& a, const Tensor<dtype>& b, Tensor<dtype>& c) {
     record(c, [a2, b2](Trace<dtype>* tr, size_t self_id) {
         Tensor<dtype> tmp1 = track(tr->adjoint(self_id));
         Tensor<dtype> tmp2 = track(tr->adjoint(a2));
-        tr->adjoint(a2) = tmp2 + unbroadcast(tmp1 * b2, a2.shape());
+        tr->adjoint(a2) = tmp2 + detail::unbroadcast(tmp1 * b2, a2.shape());
         tmp2 = track(tr->adjoint(b2));
-        tr->adjoint(b2) = tmp2 + unbroadcast(tmp1 * a2, b2.shape());
+        tr->adjoint(b2) = tmp2 + detail::unbroadcast(tmp1 * a2, b2.shape());
     });
 }
 
@@ -104,9 +105,9 @@ void div(const Tensor<dtype>& a, const Tensor<dtype>& b, Tensor<dtype>& c) {
     record(c, [a2, b2](Trace<dtype>* tr, size_t self_id) {
         Tensor<dtype> tmp1 = track(tr->adjoint(self_id));
         Tensor<dtype> tmp2 = track(tr->adjoint(a2));
-        tr->adjoint(a2) = tmp2 + unbroadcast(tmp1 / b2, a2.shape());
+        tr->adjoint(a2) = tmp2 + detail::unbroadcast(tmp1 / b2, a2.shape());
         tmp2 = track(tr->adjoint(b2));
-        tr->adjoint(b2) = tmp2 - unbroadcast(tmp1 * a2 / (b2 * b2), b2.shape());
+        tr->adjoint(b2) = tmp2 - detail::unbroadcast(tmp1 * a2 / (b2 * b2), b2.shape());
     });
 }
 
@@ -448,9 +449,11 @@ template <typename dtype> void broadcast(const Tensor<dtype>& a, Tensor<dtype>& 
     record(result, [a2](Trace<dtype>* tr, size_t self_id) {
         Tensor<dtype> tmp1 = track(tr->adjoint(self_id));
         Tensor<dtype> tmp2 = track(tr->adjoint(a2));
-        tr->adjoint(a2) = tmp2 + vjp::unbroadcast(tmp1, a2.shape());
+        tr->adjoint(a2) = tmp2 + detail::unbroadcast(tmp1, a2.shape());
     });
 }
+
+namespace detail {
 
 template <typename dtype> Tensor<dtype> transpose_last_two(const Tensor<dtype>& tensor) {
     boost::container::small_vector<size_t, 4> axes;
@@ -475,6 +478,8 @@ Tensor<dtype> unbatch(const Tensor<dtype>& cot, std::span<const size_t> target) 
     return unbroadcast(cot, shape);
 }
 
+} // namespace detail
+
 template <typename dtype>
 void matmul(const Tensor<dtype>& a, const Tensor<dtype>& b, Tensor<dtype>& c) {
     if (!a.is_tracked() && !b.is_tracked()) {
@@ -486,11 +491,90 @@ void matmul(const Tensor<dtype>& a, const Tensor<dtype>& b, Tensor<dtype>& c) {
     record(c, [a2, b2](Trace<dtype>* tr, size_t self_id) {
         Tensor<dtype> tmp1 = track(tr->adjoint(self_id));
         Tensor<dtype> tmp2 = track(tr->adjoint(a2));
-        tr->adjoint(a2) = tmp2 + unbatch(matmul(tmp1, transpose_last_two(b2.detach())), a2.shape());
+        tr->adjoint(a2) =
+            tmp2 +
+            detail::unbatch(matmul(tmp1, detail::transpose_last_two(b2.detach())), a2.shape());
         tmp2 = track(tr->adjoint(b2));
-        tr->adjoint(b2) = tmp2 + unbatch(matmul(transpose_last_two(a2.detach()), tmp1), b2.shape());
+        tr->adjoint(b2) =
+            tmp2 +
+            detail::unbatch(matmul(detail::transpose_last_two(a2.detach()), tmp1), b2.shape());
     });
 }
+
+template <typename dtype> void slice(const Tensor<dtype>& a, Tensor<dtype>& c, size_t index) {
+    if (!a.is_tracked()) {
+        return;
+    }
+
+    auto a2 = track(a);
+    record(c, [a2, index](Trace<dtype>* tr, size_t self_id) {
+        auto tmp1 = track(tr->adjoint(self_id));
+        auto tmp2 = track(tr->adjoint(a2));
+        tr->adjoint(a2) = tmp2 + scatter(tmp1.unsqueeze(0), a2.shape(), 0, index, 1);
+    });
+}
+
+template <typename dtype>
+void slice(const Tensor<dtype>& a, Tensor<dtype>& c, size_t dim, size_t start, size_t,
+           size_t step) {
+    if (!a.is_tracked()) {
+        return;
+    }
+
+    auto a2 = track(a);
+    record(c, [a2, dim, start, step](Trace<dtype>* tr, size_t self_id) {
+        auto tmp1 = track(tr->adjoint(self_id));
+        auto tmp2 = track(tr->adjoint(a2));
+        tr->adjoint(a2) = tmp2 + scatter(tmp1, a2.shape(), dim, start, step);
+    });
+}
+
+template <typename dtype>
+void scatter(const Tensor<dtype>& a, Tensor<dtype>& c, size_t dim, size_t start, size_t step) {
+    if (!a.is_tracked()) {
+        return;
+    }
+
+    auto a2 = track(a);
+    record(c, [a2, dim, start, step](Trace<dtype>* tr, size_t self_id) {
+        auto tmp1 = track(tr->adjoint(self_id));
+        auto tmp2 = track(tr->adjoint(a2));
+        const size_t count = a2.shape()[dim];
+        const size_t end = (count == 0) ? start : start + (count - 1) * step + 1;
+        tr->adjoint(a2) = tmp2 + tmp1.slice(dim, start, end, step);
+    });
+}
+
+template <typename dtype>
+void im2col(const Tensor<dtype>& im, Tensor<dtype>& cols, size_t KH, size_t KW, size_t dh,
+            size_t dw, size_t ph, size_t pw, size_t sh, size_t sw) {
+    if (!im.is_tracked()) {
+        return;
+    }
+
+    Tensor<dtype> im2 = track(im);
+    record(cols, [im2, KH, KW, dh, dw, ph, pw, sh, sw](Trace<dtype>* tr, size_t self_id) {
+        Tensor<dtype> tmp1 = track(tr->adjoint(self_id));
+        Tensor<dtype> tmp2 = track(tr->adjoint(im2));
+        tr->adjoint(im2) = tmp2 + col2im(tmp1, im2.shape()[1], im2.shape()[2], im2.shape()[3], KH,
+                                         KW, dh, dw, ph, pw, sh, sw); // (B, C, H, W)
+    });
+}
+
+template <typename dtype>
+void col2im(const Tensor<dtype>& cols, Tensor<dtype>& im, size_t KH, size_t KW, size_t dh,
+            size_t dw, size_t ph, size_t pw, size_t sh, size_t sw) {
+    if (!cols.is_tracked()) {
+        return;
+    }
+
+    Tensor<dtype> a2 = track(cols);
+    record(im, [a2, KH, KW, dh, dw, ph, pw, sh, sw](Trace<dtype>* tr, size_t self_id) {
+        Tensor<dtype> tmp1 = track(tr->adjoint(self_id));
+        Tensor<dtype> tmp2 = track(tr->adjoint(a2));
+        tr->adjoint(a2) = tmp2 + im2col(tmp1, KH, KW, dh, dw, ph, pw, sh, sw); // (B, K, L)
+    });
+};
 
 } // namespace vjp
 } // namespace nanojax

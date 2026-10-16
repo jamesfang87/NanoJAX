@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import copy
 
-from .... import _tensor as nj
+import nanojax as nj
 
 
 class Module:

@@ -1,7 +1,7 @@
 #pragma once
 
-#include "grad/vjp.hpp"
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <stdexcept>
@@ -15,6 +15,7 @@
 #endif
 #endif
 
+#include "grad/vjp.hpp"
 #include "tensor/tensor.hpp"
 
 namespace nanojax {
@@ -103,8 +104,8 @@ Tensor<dtype> binary_broadcast(const Tensor<dtype>& lhs, const Tensor<dtype>& rh
  * @throws std::invalid_argument If a pair of aligned dimensions are neither
  *         equal nor one.
  */
-inline boost::container::small_vector<size_t, 4> broadcast_shapes(std::span<const size_t> lhs,
-                                                                  std::span<const size_t> rhs) {
+inline boost::container::small_vector<size_t, 4> broadcast_shape(std::span<const size_t> lhs,
+                                                                 std::span<const size_t> rhs) {
     const size_t ndim = std::max(lhs.size(), rhs.size());
     boost::container::small_vector<size_t, 4> shape(ndim, 1);
 
@@ -376,8 +377,8 @@ template <typename dtype> Tensor<dtype> matmul(const Tensor<dtype>& lhs, const T
         throw std::invalid_argument{"Invalid dimensions of lhs and rhs for matmul"};
     }
 
-    auto batch = detail::broadcast_shapes(lhs_p.shape().first(lhs_p.ndim() - 2),
-                                          rhs_p.shape().first(rhs_p.ndim() - 2));
+    auto batch = detail::broadcast_shape(lhs_p.shape().first(lhs_p.ndim() - 2),
+                                         rhs_p.shape().first(rhs_p.ndim() - 2));
     const size_t batch_extent =
         std::accumulate(batch.begin(), batch.end(), size_t{1}, std::multiplies{});
 
@@ -438,6 +439,197 @@ template <typename dtype> Tensor<dtype> matmul(const Tensor<dtype>& lhs, const T
         final_shape.pop_back();
     }
     return c.reshape(final_shape);
+}
+
+/**
+ * @brief Places @p g into a zero tensor of @p full_shape along @p dim.
+ *
+ * This is the adjoint (transpose) of Tensor::slice: it writes @p g's elements at
+ * positions start, start+step, start+2*step, ... along @p dim and leaves every
+ * other element zero. @p g must have the same rank as @p full_shape and match it
+ * on every dimension other than @p dim.
+ *
+ * @param g Values to place.
+ * @param full_shape Shape of the result.
+ * @param dim Dimension along which to place.
+ * @param start First placement position along @p dim.
+ * @param step Distance between successive placements along @p dim.
+ * @return A new dense tensor of shape @p full_shape.
+ */
+template <typename dtype>
+Tensor<dtype> scatter(const Tensor<dtype>& g, std::span<const size_t> full_shape, size_t dim,
+                      size_t start, size_t step) {
+    const size_t rank = full_shape.size();
+    if (dim >= rank) {
+        throw std::out_of_range{"scatter dim is out of range"};
+    }
+    if (step == 0) {
+        throw std::invalid_argument{"scatter step cannot be zero"};
+    }
+    if (g.ndim() != rank) {
+        throw std::invalid_argument{"scatter requires g to have the result's rank"};
+    }
+
+    const size_t count = g.shape()[dim];
+    for (size_t d = 0; d < rank; ++d) {
+        if (d != dim && g.shape()[d] != full_shape[d]) {
+            throw std::invalid_argument{"scatter shape mismatch"};
+        }
+    }
+    if (count > 0 && start + (count - 1) * step >= full_shape[dim]) {
+        throw std::out_of_range{"scatter position is out of range"};
+    }
+
+    auto out = Tensor<dtype>::zeros(full_shape);
+    if (count > 0) {
+        const auto g_cont = g.contiguous();
+
+        const auto* src = g_cont.data();
+        auto* dst = out.data();
+
+        boost::container::small_vector<size_t, 4> src_stride(rank);
+        boost::container::small_vector<size_t, 4> dst_stride(rank);
+        size_t src_extent = 1;
+        size_t dst_extent = 1;
+        for (size_t d = rank; d-- > 0;) {
+            src_stride[d] = src_extent;
+            src_extent *= g_cont.shape()[d];
+            dst_stride[d] = dst_extent;
+            dst_extent *= full_shape[d];
+        }
+
+        for (size_t i = 0; i < g_cont.numel(); ++i) {
+            size_t rem = i, offset = 0;
+            for (size_t d = 0; d < rank; ++d) {
+                const size_t coord = rem / src_stride[d];
+                rem %= src_stride[d];
+                const size_t fcoord = (d == dim) ? start + coord * step : coord;
+                offset += fcoord * dst_stride[d];
+            }
+            dst[offset] = src[i];
+        }
+    }
+
+    vjp::scatter(g, out, dim, start, step);
+    return out;
+}
+
+inline std::array<size_t, 2> out_shape(size_t H, size_t W, size_t KH, size_t KW, size_t dh,
+                                       size_t dw, size_t ph, size_t pw, size_t sh, size_t sw) {
+    const size_t eff_h = dh * (KH - 1) + 1;
+    const size_t eff_w = dw * (KW - 1) + 1;
+
+    if (H + 2 * ph < eff_h || W + 2 * pw < eff_w) {
+        throw std::invalid_argument{"kernel is larger than the padded input"};
+    }
+
+    const size_t OH = (H + 2 * ph - eff_h) / sh + 1;
+    const size_t OW = (W + 2 * pw - eff_w) / sw + 1;
+    return {OH, OW};
+}
+
+template <typename dtype>
+Tensor<dtype> im2col(const Tensor<dtype>& im, size_t KH, size_t KW, size_t dh, size_t dw, size_t ph,
+                     size_t pw, size_t sh, size_t sw) {
+
+    if (im.ndim() != 4) {
+        throw std::invalid_argument{"im2col expects a rank-4 (N, C, H, W) input"};
+    }
+
+    const size_t B = im.shape()[0], C_in = im.shape()[1];
+    const size_t H = im.shape()[2], W = im.shape()[3];
+    const auto [OH, OW] = out_shape(H, W, KH, KW, dh, dw, ph, pw, sh, sw);
+
+    auto cols = Tensor<dtype>::uninitialized({B, C_in * KH * KW, OH * OW});
+
+    const auto src = im.contiguous();
+    const dtype* in = src.data();
+    dtype* out = cols.data();
+
+    for (size_t b = 0; b < B; ++b) {
+        for (size_t c = 0; c < C_in; ++c) {
+            for (size_t kh = 0; kh < KH; ++kh) {
+                for (size_t kw = 0; kw < KW; ++kw) {
+                    size_t row = (c * KH + kh) * KW + kw;
+                    for (size_t oh = 0; oh < OH; ++oh) {
+                        for (size_t ow = 0; ow < OW; ++ow) {
+                            long ih = (long)oh * sh + (long)kh * dh - (long)ph;
+                            long iw = (long)ow * sw + (long)kw * dw - (long)pw;
+
+                            dtype v = dtype{0};
+                            if (ih >= 0 && ih < (long)H && iw >= 0 && iw < (long)W) {
+                                v = in[((b * C_in + c) * H + (size_t)ih) * W + (size_t)iw];
+                            }
+
+                            out[((b * C_in * KH * KW) + row) * (OH * OW) + (oh * OW + ow)] = v;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    vjp::im2col(im, cols, KH, KW, dh, dw, ph, pw, sh, sw);
+    return cols;
+}
+
+template <typename dtype>
+Tensor<dtype> col2im(const Tensor<dtype>& cols, size_t C_in, size_t H, size_t W, size_t KH,
+                     size_t KW, size_t dh, size_t dw, size_t ph, size_t pw, size_t sh, size_t sw) {
+
+    if (cols.ndim() != 3) {
+        throw std::invalid_argument{"im2col expects a rank-4 (B, K, L) input"};
+    }
+
+    const size_t B = cols.shape()[0];
+    const auto [OH, OW] = out_shape(H, W, KH, KW, dh, dw, ph, pw, sh, sw);
+    auto im = Tensor<dtype>::zeros({B, C_in, H, W});
+
+    const auto src = cols.contiguous();
+    const dtype* in = src.data();
+    dtype* out = im.data();
+
+    for (size_t b = 0; b < B; ++b) {
+        for (size_t c = 0; c < C_in; ++c) {
+            for (size_t kh = 0; kh < KH; ++kh) {
+                for (size_t kw = 0; kw < KW; ++kw) {
+                    size_t row = (c * KH + kh) * KW + kw;
+                    for (size_t oh = 0; oh < OH; ++oh) {
+                        for (size_t ow = 0; ow < OW; ++ow) {
+                            long ih = (long)oh * sh + (long)kh * dh - (long)ph;
+                            long iw = (long)ow * sw + (long)kw * dw - (long)pw;
+
+                            if (ih >= 0 && ih < (long)H && iw >= 0 && iw < (long)W) {
+                                dtype v =
+                                    in[((b * C_in * KH * KW) + row) * (OH * OW) + (oh * OW + ow)];
+                                out[((b * C_in + c) * H + (size_t)ih) * W + (size_t)iw] += v;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    vjp::col2im(cols, im, KH, KW, dh, dw, ph, pw, sh, sw);
+    return im;
+}
+
+template <typename dtype>
+Tensor<dtype> conv2D(const Tensor<dtype>& im, const Tensor<dtype>& ker_flat, size_t C_out,
+                     size_t KH, size_t KW, size_t dh, size_t dw, size_t ph, size_t pw, size_t sh,
+                     size_t sw) {
+    if (im.ndim() != 4) {
+        throw std::invalid_argument{"conv2D expects a rank-4 (N, C, H, W) input"};
+    }
+
+    const size_t B = im.shape()[0];
+    const size_t C_in = im.shape()[1];
+    const size_t H = im.shape()[2];
+    const size_t W = im.shape()[3];
+    const auto [OH, OW] = out_shape(H, W, KH, KW, dh, dw, ph, pw, sh, sw);
+
+    auto ker = ker_flat.reshape({C_out, C_in * KH * KW});
+    auto col = im2col(im, KH, KW, dh, dw, ph, pw, sh, sw);
+    return matmul(ker, col).reshape({B, C_out, OH, OW});
 }
 
 // TODO: Speed these ops up
@@ -738,6 +930,42 @@ template <typename dtype> Tensor<dtype> min(const Tensor<dtype>& tensor) {
 
     vjp::min(tensor, flat_idx, result);
     return result;
+}
+
+namespace detail {
+
+template <typename dtype> Tensor<dtype> max(const Tensor<dtype>& a, const Tensor<dtype>& b) {
+    return a + relu(b - a);
+}
+
+template <typename dtype> Tensor<dtype> min(const Tensor<dtype>& a, const Tensor<dtype>& b) {
+    return a - relu(a - b);
+}
+
+} // namespace detail
+
+template <typename dtype> Tensor<dtype> max(const Tensor<dtype>& tensor, size_t dim) {
+    if (dim >= tensor.ndim()) {
+        throw std::out_of_range{"max axis is out of range"};
+    }
+    auto out = tensor.slice(dim, 0, 1, 1);
+
+    for (size_t i = 1; i < tensor.shape()[dim]; ++i) {
+        out = detail::max(out, tensor.slice(dim, i, i + 1, 1));
+    }
+    return out.squeeze(dim);
+}
+
+template <typename dtype> Tensor<dtype> min(const Tensor<dtype>& tensor, size_t dim) {
+    if (dim >= tensor.ndim()) {
+        throw std::out_of_range{"min axis is out of range"};
+    }
+    auto out = tensor.slice(dim, 0, 1, 1);
+
+    for (size_t i = 1; i < tensor.shape()[dim]; ++i) {
+        out = detail::min(out, tensor.slice(dim, i, i + 1, 1));
+    }
+    return out.squeeze(dim);
 }
 
 } // namespace nanojax

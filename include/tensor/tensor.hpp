@@ -33,6 +33,12 @@ void permute(const Tensor<dtype>& a, Tensor<dtype>& result, std::span<const size
 template <typename dtype> void squeeze(const Tensor<dtype>& a, Tensor<dtype>& result);
 template <typename dtype> void unsqueeze(const Tensor<dtype>& a, Tensor<dtype>& result);
 template <typename dtype> void broadcast(const Tensor<dtype>& a, Tensor<dtype>& result);
+template <typename dtype> void slice(const Tensor<dtype>& a, Tensor<dtype>& result, size_t index);
+template <typename dtype>
+void slice(const Tensor<dtype>& a, Tensor<dtype>& result, size_t dim, size_t start, size_t end,
+           size_t step);
+template <typename dtype>
+void scatter(const Tensor<dtype>& g, Tensor<dtype>& out, size_t dim, size_t start, size_t step);
 } // namespace vjp
 
 enum class Device {
@@ -971,10 +977,8 @@ class Tensor {
         boost::container::small_vector<size_t, 4> new_shape(shape_.begin() + 1, shape_.end());
         boost::container::small_vector<size_t, 4> new_stride(stride_.begin() + 1, stride_.end());
 
-        // TODO: uncomment when vjp::slice is written
-
         Tensor result{storage_, new_shape, new_stride, offset_ + index * stride_[0], device_};
-        // vjp::slice(*this, result);
+        vjp::slice(*this, result, index);
         return result;
     }
 
@@ -994,10 +998,8 @@ class Tensor {
         new_shape[dim] = (end - start + step - 1) / step;
         new_stride[dim] *= step;
 
-        // TODO: uncomment when vjp::slice is written
-
         Tensor result{storage_, new_shape, new_stride, offset_ + start * stride_[dim], device_};
-        // vjp::slice(*this, result);
+        vjp::slice(*this, result, dim, start, end, step);
         return result;
     }
 
