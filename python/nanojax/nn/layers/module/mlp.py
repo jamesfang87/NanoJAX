@@ -4,7 +4,7 @@ import math
 import random
 from typing import NamedTuple, Optional
 
-from .... import _tensor as nj
+import nanojax as nj
 from .module import Module
 
 
@@ -49,9 +49,3 @@ class MLP(Module):
         if params.b is None:
             return x @ params.w
         return x @ params.w + params.b
-
-    def input_features(self) -> int:
-        return self.in_features
-
-    def output_features(self) -> int:
-        return self.out_features

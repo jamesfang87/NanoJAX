@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 
-from ...._tensor import Tensor
+import nanojax as nj
 from .mlp import MLP
 from .module import Module
 
@@ -30,11 +30,11 @@ class MultiHeadAttention(Module):
         self.v_proj = MLP(in_features, in_features, use_bias, seed=seeds[2])
         self.out_proj = MLP(in_features, out_features, use_bias, seed=seeds[3])
 
-    def forward(self, x) -> Tensor:
+    def forward(self, x) -> nj.Tensor:
         raise NotImplementedError
 
-    def split_heads(self, x: Tensor, batch_size: int) -> Tensor:
+    def split_heads(self, x: nj.Tensor, batch_size: int) -> nj.Tensor:
         raise NotImplementedError
 
-    def combine_heads(self, x: Tensor, batch_size: int) -> Tensor:
+    def combine_heads(self, x: nj.Tensor, batch_size: int) -> nj.Tensor:
         raise NotImplementedError

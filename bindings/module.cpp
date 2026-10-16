@@ -226,7 +226,7 @@ DType promote(DType a, DType b) {
 
 // Copies @p src into a new dense Tensor<U>, converting every element.
 template <typename U, typename T> Tensor<U> cast_tensor(const Tensor<T>& src) {
-    auto contiguous = src.contiguous();
+    const auto contiguous = src.contiguous();
     auto out = Tensor<U>::uninitialized(contiguous.shape());
 
     const T* in = contiguous.data();
@@ -722,8 +722,16 @@ NB_MODULE(_tensor, t) {
              })
         .def("max",
              [](const PyTensor& a) { return visit_unary(a, [](const auto& x) { return max(x); }); })
+        .def("max",
+             [](const PyTensor& a, size_t axis) {
+                 return visit_axis(a, axis, [](const auto& x, size_t ax) { return max(x, ax); });
+             })
         .def("min",
              [](const PyTensor& a) { return visit_unary(a, [](const auto& x) { return min(x); }); })
+        .def("min",
+             [](const PyTensor& a, size_t axis) {
+                 return visit_axis(a, axis, [](const auto& x, size_t ax) { return min(x, ax); });
+             })
         .def("transpose",
              [](const PyTensor& a) {
                  return visit_unary(a, [](const auto& x) { return x.transpose(); });
@@ -762,6 +770,15 @@ NB_MODULE(_tensor, t) {
              [](const PyTensor& a, size_t axis) {
                  return visit_unary(a, [&](const auto& x) { return x.unsqueeze(axis); });
              })
+        .def("slice",
+             [](const PyTensor& a, size_t index) {
+                 return visit_unary(a, [&](const auto& x) { return x.slice(index); });
+             })
+        .def("slice",
+             [](const PyTensor& a, size_t dim, size_t start, size_t end, size_t step) {
+                 return visit_unary(a, [&](const auto& x) { return x.slice(dim, start, end, step); });
+             },
+             nb::arg("dim"), nb::arg("start"), nb::arg("end"), nb::arg("step") = 1)
         .def("exp", &op_exp)
         .def("log", &op_log)
         .def("sqrt", &op_sqrt)
@@ -830,6 +847,52 @@ NB_MODULE(_tensor, t) {
                                         [](const auto& x, const auto& y) { return matmul(x, y); });
         },
         nb::call_guard<nb::gil_scoped_release>());
+
+    t.def(
+        "im2col",
+        [](const PyTensor& im, size_t KH, size_t KW, size_t dh, size_t dw, size_t ph, size_t pw,
+           size_t sh, size_t sw) {
+            return visit_unary(im, [&](const auto& x) {
+                return im2col(x, KH, KW, dh, dw, ph, pw, sh, sw);
+            });
+        },
+        nb::arg("im"), nb::arg("kh"), nb::arg("kw"), nb::arg("dh") = 1, nb::arg("dw") = 1,
+        nb::arg("ph") = 0, nb::arg("pw") = 0, nb::arg("sh") = 1, nb::arg("sw") = 1);
+
+    t.def(
+        "col2im",
+        [](const PyTensor& cols, size_t C_in, size_t H, size_t W, size_t KH, size_t KW, size_t dh,
+           size_t dw, size_t ph, size_t pw, size_t sh, size_t sw) {
+            return visit_unary(cols, [&](const auto& x) {
+                return col2im(x, C_in, H, W, KH, KW, dh, dw, ph, pw, sh, sw);
+            });
+        },
+        nb::arg("cols"), nb::arg("c_in"), nb::arg("h"), nb::arg("w"), nb::arg("kh"),
+        nb::arg("kw"), nb::arg("dh") = 1, nb::arg("dw") = 1, nb::arg("ph") = 0,
+        nb::arg("pw") = 0, nb::arg("sh") = 1, nb::arg("sw") = 1);
+
+    t.def(
+        "conv2d",
+        [](const PyTensor& im, const PyTensor& ker, size_t C_out, size_t KH, size_t KW, size_t dh,
+           size_t dw, size_t ph, size_t pw, size_t sh, size_t sw) {
+            return visit_binary_promote(im, ker, [&](const auto& x, const auto& y) {
+                return conv2D(x, y, C_out, KH, KW, dh, dw, ph, pw, sh, sw);
+            });
+        },
+        nb::arg("im"), nb::arg("kernel"), nb::arg("c_out"), nb::arg("kh"), nb::arg("kw"),
+        nb::arg("dh") = 1, nb::arg("dw") = 1, nb::arg("ph") = 0, nb::arg("pw") = 0,
+        nb::arg("sh") = 1, nb::arg("sw") = 1, nb::call_guard<nb::gil_scoped_release>());
+
+    t.def(
+        "scatter",
+        [](const PyTensor& g, std::vector<size_t> full_shape, size_t dim, size_t start,
+           size_t step) {
+            return visit_unary(g, [&](const auto& x) {
+                return scatter(x, Shape(full_shape), dim, start, step);
+            });
+        },
+        nb::arg("g"), nb::arg("full_shape"), nb::arg("dim"), nb::arg("start"),
+        nb::arg("step") = 1);
 
     nb::class_<PyTrace>(t, "Trace")
         .def(

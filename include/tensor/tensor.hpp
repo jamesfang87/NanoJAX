@@ -33,6 +33,12 @@ void permute(const Tensor<dtype>& a, Tensor<dtype>& result, std::span<const size
 template <typename dtype> void squeeze(const Tensor<dtype>& a, Tensor<dtype>& result);
 template <typename dtype> void unsqueeze(const Tensor<dtype>& a, Tensor<dtype>& result);
 template <typename dtype> void broadcast(const Tensor<dtype>& a, Tensor<dtype>& result);
+template <typename dtype> void slice(const Tensor<dtype>& a, Tensor<dtype>& result, size_t index);
+template <typename dtype>
+void slice(const Tensor<dtype>& a, Tensor<dtype>& result, size_t dim, size_t start, size_t end,
+           size_t step);
+template <typename dtype>
+void scatter(const Tensor<dtype>& g, Tensor<dtype>& out, size_t dim, size_t start, size_t step);
 } // namespace vjp
 
 enum class Device {
@@ -333,13 +339,13 @@ class Tensor {
 
     /**
      * @brief Returns the shape of the tensor.
-     * @return A view over the tensor's shape, valid while the tensor is alive.
+     * @return A view over the tensor's shape
      */
     auto shape() const { return std::span<const size_t>(shape_); }
 
     /**
      * @brief Returns the strides of the tensor.
-     * @return A view over the tensor's strides, valid while the tensor is alive.
+     * @return A view over the tensor's strides
      */
     auto strides() const { return std::span<const size_t>(stride_); }
 
@@ -956,6 +962,44 @@ class Tensor {
                 src_offset -= stride_[dim] * shape_[dim];
             }
         }
+        return result;
+    }
+
+    Tensor<dtype> slice(size_t index) const {
+        if (ndim() == 0) {
+            throw std::logic_error{"Tensor::slice on a rank-0 tensor"};
+        }
+        if (index >= shape_[0]) {
+            throw std::out_of_range{"Tensor::slice index is out of range"};
+        }
+
+        // We do not keep dims
+        boost::container::small_vector<size_t, 4> new_shape(shape_.begin() + 1, shape_.end());
+        boost::container::small_vector<size_t, 4> new_stride(stride_.begin() + 1, stride_.end());
+
+        Tensor result{storage_, new_shape, new_stride, offset_ + index * stride_[0], device_};
+        vjp::slice(*this, result, index);
+        return result;
+    }
+
+    Tensor<dtype> slice(size_t dim, size_t start, size_t end, size_t step = 1) const {
+        if (dim >= ndim()) {
+            throw std::out_of_range{"Tensor::slice dim is out of range"};
+        }
+        if (step == 0) {
+            throw std::invalid_argument{"Tensor::slice step cannot be zero"};
+        }
+        if (end > shape_[dim] || start > end) {
+            throw std::out_of_range{"Tensor::slice range is out of bounds"};
+        }
+
+        boost::container::small_vector<size_t, 4> new_shape(shape_.begin(), shape_.end());
+        boost::container::small_vector<size_t, 4> new_stride(stride_.begin(), stride_.end());
+        new_shape[dim] = (end - start + step - 1) / step;
+        new_stride[dim] *= step;
+
+        Tensor result{storage_, new_shape, new_stride, offset_ + start * stride_[dim], device_};
+        vjp::slice(*this, result, dim, start, end, step);
         return result;
     }
 
