@@ -32,7 +32,7 @@ def _ensure_nanojax_importable() -> None:
 _ensure_nanojax_importable()
 
 import nanojax as nj  # noqa: E402
-from nanojax.nn.layers import MLP, MLPParams, Module  # noqa: E402
+from nanojax.nn import MLP, MLPParams, Module  # noqa: E402
 from nanojax.transform import flatten, grad, tree_map, value_and_grad  # noqa: E402
 
 

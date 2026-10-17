@@ -4,7 +4,7 @@ import math
 import random
 from typing import NamedTuple
 
-from .... import _tensor as nj
+from .. import _tensor as nj
 from .module import Module
 
 

@@ -6,10 +6,11 @@ or:        python tests/python/test_nn.py
 
 from __future__ import annotations
 
+import math
 import unittest
 
 import nanojax as nj
-from nanojax.nn import Conv2D, Flatten
+from nanojax.nn import Conv2D, Flatten, MultiHeadAttention
 
 
 def make(shape, seed=0.0):
@@ -177,6 +178,103 @@ class TestFlatten(unittest.TestCase):
 
         _, g = nj.value_and_grad(loss)(x)
         self.assertEqual(g.shape, [2, 3, 4, 4])
+
+
+def ref_mha(m, x):
+    """Naive multi-head self-attention in pure Python, given the module's weights."""
+    xt = x.tolist()
+    B, T, _ = x.shape
+    H, d = m.num_heads, m.head_dim
+
+    def proj(xx, w, b):
+        wt, bt = w.tolist(), b.tolist()
+        return [[[sum(xx[n][t][c] * wt[c][o] for c in range(len(wt))) + bt[o]
+                  for o in range(len(bt))] for t in range(T)] for n in range(B)]
+
+    def to_heads(z):  # (B,T,C) -> (B,H,T,d)
+        return [[[[z[n][t][h * d + di] for di in range(d)] for t in range(T)]
+                 for h in range(H)] for n in range(B)]
+
+    def softmax(row):
+        mx = max(row)
+        es = [math.exp(e - mx) for e in row]
+        s = sum(es)
+        return [e / s for e in es]
+
+    q = to_heads(proj(xt, m.q_proj.weight, m.q_proj.bias))
+    k = to_heads(proj(xt, m.k_proj.weight, m.k_proj.bias))
+    v = to_heads(proj(xt, m.v_proj.weight, m.v_proj.bias))
+    scale = math.sqrt(d)
+
+    o = [[[[0.0] * d for _ in range(T)] for _ in range(H)] for _ in range(B)]
+    for n in range(B):
+        for h in range(H):
+            for i in range(T):
+                scores = [sum(q[n][h][i][di] * k[n][h][j][di] for di in range(d)) / scale
+                          for j in range(T)]
+                a = softmax(scores)
+                for di in range(d):
+                    o[n][h][i][di] = sum(a[j] * v[n][h][j][di] for j in range(T))
+
+    combined = [[[o[n][h][t][di] for h in range(H) for di in range(d)] for t in range(T)]
+                for n in range(B)]
+    return proj(combined, m.out_proj.weight, m.out_proj.bias)
+
+
+class TestMultiHeadAttention(unittest.TestCase):
+    def test_output_shape(self):
+        cases = [
+            # (in, out, heads, B, T, expected out)
+            (8, 8, 2, 2, 5, [2, 5, 8]),
+            (8, 4, 2, 3, 7, [3, 7, 4]),
+            (6, 6, 3, 1, 4, [1, 4, 6]),
+        ]
+        for cin, cout, heads, b, t, want in cases:
+            mha = MultiHeadAttention(cin, cout, heads, seed=0)
+            x = make([b, t, cin])
+            self.assertEqual(mha(x).shape, want)
+
+    def test_heads_roundtrip(self):
+        mha = MultiHeadAttention(8, 8, 2, seed=0)
+        x = make([2, 5, 8])
+        self.assertEqual(mha.combine_heads(mha.split_heads(x)).shape, [2, 5, 8])
+
+    def test_matches_reference(self):
+        mha = MultiHeadAttention(4, 4, 2, seed=3)
+        x = make([2, 3, 4], seed=1)
+        assert_close(self, mha(x).tolist(), ref_mha(mha, x), tol=1e-4)
+
+    def test_single_head_matches_reference(self):
+        mha = MultiHeadAttention(6, 6, 1, seed=5)
+        x = make([1, 4, 6], seed=2)
+        assert_close(self, mha(x).tolist(), ref_mha(mha, x), tol=1e-4)
+
+    def test_gradients_flow(self):
+        mha = MultiHeadAttention(4, 4, 2, seed=0)
+        x = make([2, 3, 4], seed=1)
+
+        def loss(module):
+            return (module(x) ** 2).sum()
+
+        value, grads = nj.value_and_grad(loss)(mha)
+        self.assertTrue(value.item() > 0.0)
+        for name in ("q_proj", "k_proj", "v_proj", "out_proj"):
+            self.assertEqual(getattr(grads, name).weight.shape,
+                             getattr(mha, name).weight.shape)
+
+    def test_attention_weights_are_convex(self):
+        mha = MultiHeadAttention(4, 4, 2, seed=0)
+        x = make([2, 3, 4], seed=1)
+        q = mha.split_heads(mha.q_proj(x))
+        k = mha.split_heads(mha.k_proj(x))
+        v = mha.split_heads(mha.v_proj(x))
+        _, attn = MultiHeadAttention._scaled_dot_product(q, k, v)
+        # each row of attention over keys sums to 1
+        rows = attn.tolist()  # (B,H,T,T)
+        for n in range(2):
+            for h in range(2):
+                for i in range(3):
+                    self.assertAlmostEqual(sum(rows[n][h][i]), 1.0, places=5)
 
 
 if __name__ == "__main__":

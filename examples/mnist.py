@@ -6,7 +6,7 @@ import nanojax as nj
 from nanojax.nn.activations import relu, softmax
 from nanojax.nn.data import DataLoader
 from nanojax.nn.data.examples import MNISTDataset
-from nanojax.nn.layers.module import MLP, Module
+from nanojax.nn import MLP, Module
 from nanojax.nn.loss import cross_entropy
 from nanojax.nn.optimizers import SGD
 

@@ -5,7 +5,7 @@ from typing import Tuple
 
 # This is some weird thing with nanobind where the module structure is weird
 # maybe I just did it wrong...
-from . import _tensor as nj
+import nanojax as nj
 
 # Callable that must return a tensor
 TensorCallable = Callable[..., nj.Tensor]

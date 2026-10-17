@@ -13,23 +13,14 @@ py.install_sources(
 py.install_sources(
   'nanojax/nn/__init__.py',
   'nanojax/nn/activations.py',
+  'nanojax/nn/attn.py',
+  'nanojax/nn/cnn.py',
+  'nanojax/nn/flatten.py',
+  'nanojax/nn/layernorm.py',
   'nanojax/nn/loss.py',
+  'nanojax/nn/mlp.py',
+  'nanojax/nn/module.py',
   subdir: 'nanojax/nn',
-)
-
-py.install_sources(
-  'nanojax/nn/layers/__init__.py',
-  subdir: 'nanojax/nn/layers',
-)
-
-py.install_sources(
-  'nanojax/nn/layers/module/__init__.py',
-  'nanojax/nn/layers/module/attn.py',
-  'nanojax/nn/layers/module/cnn.py',
-  'nanojax/nn/layers/module/flatten.py',
-  'nanojax/nn/layers/module/mlp.py',
-  'nanojax/nn/layers/module/module.py',
-  subdir: 'nanojax/nn/layers/module',
 )
 
 py.install_sources(

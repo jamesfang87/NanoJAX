@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from .. import _tensor as nj
+from .module import Module
 
 
 def sigmoid(x: nj.Tensor) -> nj.Tensor:
@@ -41,3 +42,64 @@ def softmax(logits: nj.Tensor, axis: int = -1) -> nj.Tensor:
     shifted = logits - logits.max().item()
     exps = nj.exp(shifted)
     return exps / exps.sum(axis).unsqueeze(axis)
+
+
+class Sigmoid(Module):
+    def forward(self, x: nj.Tensor) -> nj.Tensor:
+        return sigmoid(x)
+
+
+class Swish(Module):
+    def __init__(self, beta: float = 1.0) -> None:
+        self.beta = beta
+
+    def forward(self, x: nj.Tensor) -> nj.Tensor:
+        return swish(x, self.beta)
+
+
+class Tanh(Module):
+    def forward(self, x: nj.Tensor) -> nj.Tensor:
+        return tanh(x)
+
+
+class ReLU(Module):
+    def forward(self, x: nj.Tensor) -> nj.Tensor:
+        return relu(x)
+
+
+class LeakyReLU(Module):
+    def __init__(self, alpha: float = 0.01) -> None:
+        self.alpha = alpha
+
+    def forward(self, x: nj.Tensor) -> nj.Tensor:
+        return leaky_relu(x, self.alpha)
+
+
+class ELU(Module):
+    def __init__(self, alpha: float = 1.0) -> None:
+        self.alpha = alpha
+
+    def forward(self, x: nj.Tensor) -> nj.Tensor:
+        return elu(x, self.alpha)
+
+
+class SELU(Module):
+    def __init__(self, lam: float = 1.0507, alpha: float = 1.6733) -> None:
+        self.lam = lam
+        self.alpha = alpha
+
+    def forward(self, x: nj.Tensor) -> nj.Tensor:
+        return selu(x, self.lam, self.alpha)
+
+
+class GELU(Module):
+    def forward(self, x: nj.Tensor) -> nj.Tensor:
+        return gelu(x)
+
+
+class Softmax(Module):
+    def __init__(self, axis: int = -1) -> None:
+        self.axis = axis
+
+    def forward(self, x: nj.Tensor) -> nj.Tensor:
+        return softmax(x, self.axis)
