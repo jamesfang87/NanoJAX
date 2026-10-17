@@ -1,4 +1,4 @@
-"""Tests for the nn layer modules (Conv2D, Flatten).
+"""Tests for the nn layer modules (Conv2D, Flatten, MultiHeadAttention, LayerNorm).
 
 Run with:  python -m unittest tests.python.test_nn
 or:        python tests/python/test_nn.py
@@ -10,7 +10,8 @@ import math
 import unittest
 
 import nanojax as nj
-from nanojax.nn import Conv2D, Flatten, MultiHeadAttention
+import nanojax.nn as nn
+from nanojax.nn import Conv2D, Flatten, LayerNorm, MultiHeadAttention
 
 
 def make(shape, seed=0.0):
@@ -275,6 +276,151 @@ class TestMultiHeadAttention(unittest.TestCase):
             for h in range(2):
                 for i in range(3):
                     self.assertAlmostEqual(sum(rows[n][h][i]), 1.0, places=5)
+
+
+def ref_layernorm(x, weight, bias, eps=1e-5):
+    """Naive LayerNorm over the last axis in pure Python, independent of the library."""
+    wt, bt = weight.tolist(), bias.tolist()
+
+    def normalize(row):
+        mean = sum(row) / len(row)
+        var = sum((v - mean) ** 2 for v in row) / len(row)
+        scale = math.sqrt(var + eps)
+        return [(v - mean) / scale * w + b for v, w, b in zip(row, wt, bt)]
+
+    def walk(node):
+        if isinstance(node[0], list):
+            return [walk(child) for child in node]
+        return normalize(node)
+
+    return walk(x.tolist())
+
+
+class TestLayerNorm(unittest.TestCase):
+    def test_parameter_shapes_and_identity_init(self):
+        ln = LayerNorm(6)
+        self.assertEqual(sorted(ln.named_parameters()), ["bias", "weight"])
+        self.assertEqual(ln.weight.shape, [6])
+        self.assertEqual(ln.bias.shape, [6])
+        # Starts as the identity: gamma = 1, beta = 0.
+        assert_close(self, ln.weight.tolist(), [1.0] * 6)
+        assert_close(self, ln.bias.tolist(), [0.0] * 6)
+
+    def test_output_shape(self):
+        for shape, dim in (([2, 3, 4], 4), ([5, 8], 8), ([1, 4, 2, 6], 6)):
+            self.assertEqual(LayerNorm(dim)(make(shape)).shape, shape)
+
+    def test_matches_reference(self):
+        for shape, dim in (([2, 3, 4], 4), ([5, 8], 8), ([1, 3, 2, 6], 6)):
+            ln = LayerNorm(dim)
+            x = make(shape, seed=1)
+            got = ln(x).tolist()
+            want = ref_layernorm(x, ln.weight, ln.bias)
+            assert_close(self, got, want, tol=1e-4)
+
+    def test_matches_reference_with_custom_affine(self):
+        ln = LayerNorm(4)
+        ln.weight = nj.Tensor([0.5, -1.0, 2.0, 0.25])
+        ln.bias = nj.Tensor([1.0, 0.0, -0.5, 0.0])
+        x = make([2, 5, 4], seed=2)
+        assert_close(self, ln(x).tolist(), ref_layernorm(x, ln.weight, ln.bias), tol=1e-4)
+
+    def test_default_normalizes_each_row(self):
+        ln = LayerNorm(4)
+        x = nj.Tensor([1.0, 2.0, 3.0, 4.0, 10.0, -5.0, 0.0, 2.0]).reshape([2, 4])
+        for row in ln(x).tolist():
+            mean = sum(row) / len(row)
+            var = sum((v - mean) ** 2 for v in row) / len(row)
+            assert_close(self, mean, 0.0, tol=1e-5)
+            assert_close(self, var, 1.0, tol=1e-4)
+
+    def test_constant_row_is_zero(self):
+        # A zero-variance row must not divide by zero; eps keeps it finite.
+        ln = LayerNorm(3)
+        x = nj.Tensor([1.0, 1.0, 1.0, 2.0, 2.0, 2.0]).reshape([2, 3])
+        assert_close(self, ln(x).tolist(), [[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]], tol=1e-5)
+
+    def test_handles_non_contiguous_input(self):
+        x = make([2, 3, 4], seed=4).permute([0, 2, 1])  # (2, 4, 3), not contiguous
+        ln = LayerNorm(3)
+        assert_close(self, ln(x).tolist(), ref_layernorm(x, ln.weight, ln.bias), tol=1e-4)
+
+    def test_gradients_flow(self):
+        ln = LayerNorm(4)
+        x = make([2, 3, 4], seed=5)
+        value, grads = nj.value_and_grad(lambda m: (m(x) ** 2).sum())(ln)
+        self.assertTrue(value.item() > 0.0)
+        self.assertEqual(grads.weight.shape, [4])
+        self.assertEqual(grads.bias.shape, [4])
+
+    def test_gradient_reaches_input(self):
+        # With the identity init nothing in the layer may block the gradient.
+        ln = LayerNorm(4)
+        x = make([2, 3, 4], seed=6)
+        _, gx = nj.value_and_grad(lambda t: (ln(t) ** 2).sum())(x)
+        self.assertTrue(any(v != 0.0 for a in gx.tolist() for b in a for v in b))
+
+    def test_weight_grad_matches_fd(self):
+        ln = LayerNorm(4)
+        x = make([2, 3, 4], seed=7)
+
+        def loss(module):
+            return (module(x) ** 2).sum()
+
+        _, grads = nj.value_and_grad(loss)(ln)
+        analytic = grads.weight.tolist()
+
+        base = ln.weight.tolist()
+        h = 1e-3
+        for idx in (0, 2, 3):
+            plus, minus = base[:], base[:]
+            plus[idx] += h
+            minus[idx] -= h
+            forward = loss(ln.with_parameters({"weight": nj.Tensor(plus)})).item()
+            backward = loss(ln.with_parameters({"weight": nj.Tensor(minus)})).item()
+            numeric = (forward - backward) / (2 * h)
+            self.assertAlmostEqual(analytic[idx], numeric, places=2)
+
+    def test_bias_grad_matches_fd(self):
+        ln = LayerNorm(4)
+        x = make([2, 3, 4], seed=8)
+
+        def loss(module):
+            return (module(x) ** 2).sum()
+
+        _, grads = nj.value_and_grad(loss)(ln)
+        analytic = grads.bias.tolist()
+
+        base = ln.bias.tolist()
+        h = 1e-3
+        for idx in (0, 1, 3):
+            plus, minus = base[:], base[:]
+            plus[idx] += h
+            minus[idx] -= h
+            forward = loss(ln.with_parameters({"bias": nj.Tensor(plus)})).item()
+            backward = loss(ln.with_parameters({"bias": nj.Tensor(minus)})).item()
+            numeric = (forward - backward) / (2 * h)
+            self.assertAlmostEqual(analytic[idx], numeric, places=2)
+
+    def test_used_in_a_network(self):
+        class Net(nn.Module):
+            def __init__(self):
+                self.fc1 = nn.MLP(4, 8, seed=0)
+                self.norm = LayerNorm(8)
+                self.act = nn.ReLU()
+                self.fc2 = nn.MLP(8, 2, seed=1)
+
+            def forward(self, t):
+                return self.fc2(self.act(self.norm(self.fc1(t))))
+
+        net = Net()
+        value, grads = nj.value_and_grad(
+            lambda m: (m(make([3, 4], seed=9)) ** 2).sum()
+        )(net)
+        self.assertTrue(value.item() > 0.0)
+        self.assertEqual(sorted(grads.named_parameters()),
+                         ["fc1.bias", "fc1.weight", "fc2.bias", "fc2.weight",
+                          "norm.bias", "norm.weight"])
 
 
 if __name__ == "__main__":

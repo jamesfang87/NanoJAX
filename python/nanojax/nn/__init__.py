@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from . import activations, attn, cnn, data, flatten, loss, mlp, module, optimizers
+from . import activations, attn, cnn, data, flatten, layernorm, loss, mlp, module, optimizers
 from .activations import (
     ELU,
     GELU,
@@ -25,6 +25,7 @@ from .attn import MultiHeadAttention
 from .cnn import Conv2D, Conv2DParams
 from .data import DataLoader, Dataset, MNISTDataset, Sample
 from .flatten import Flatten
+from .layernorm import LayerNorm
 from .loss import cross_entropy, mse_loss
 from .mlp import MLP, MLPParams
 from .module import Module
@@ -36,6 +37,7 @@ __all__ = [
     "cnn",
     "data",
     "flatten",
+    "layernorm",
     "loss",
     "mlp",
     "module",
@@ -71,6 +73,7 @@ __all__ = [
     "Conv2D",
     "Conv2DParams",
     "Flatten",
+    "LayerNorm",
     "SGD",
     "Optimizer",
 ]
