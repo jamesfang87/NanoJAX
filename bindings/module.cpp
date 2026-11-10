@@ -1,4 +1,5 @@
 #include <nanobind/nanobind.h>
+#include <nanobind/ndarray.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>
 
@@ -310,6 +311,21 @@ PyTensor make_tensor(nb::handle data, const std::string& dtype) {
     });
 }
 
+// Copies a C-contiguous NumPy (or other DLPack) array into a dense Tensor.
+template <typename T>
+PyTensor tensor_from_numpy(nb::ndarray<const T, nb::c_contig> array) {
+    std::vector<size_t> shape(array.ndim());
+    for (size_t i = 0; i < array.ndim(); ++i) {
+        shape[i] = array.shape(i);
+    }
+
+    auto tensor = Tensor<T>::uninitialized(Shape(shape));
+    if (array.size() != 0) {
+        std::copy(array.data(), array.data() + array.size(), tensor.data());
+    }
+    return PyTensor{std::move(tensor)};
+}
+
 PyTensor make_zeros(const std::vector<size_t>& shape, const std::string& dtype) {
     return dispatch_dtype(dtype, [&](auto tag) -> PyTensor {
         using T = typename decltype(tag)::type;
@@ -462,6 +478,26 @@ NB_MODULE(_tensor, t) {
                 new (self) PyTensor{make_tensor(data, name)};
             },
             nb::arg("data"), nb::arg("dtype") = nb::none())
+        .def_static(
+            "from_numpy",
+            [](nb::ndarray<const float, nb::c_contig> array) {
+                return tensor_from_numpy<float>(array);
+            })
+        .def_static(
+            "from_numpy",
+            [](nb::ndarray<const double, nb::c_contig> array) {
+                return tensor_from_numpy<double>(array);
+            })
+        .def_static(
+            "from_numpy",
+            [](nb::ndarray<const std::int32_t, nb::c_contig> array) {
+                return tensor_from_numpy<std::int32_t>(array);
+            })
+        .def_static(
+            "from_numpy",
+            [](nb::ndarray<const std::int64_t, nb::c_contig> array) {
+                return tensor_from_numpy<std::int64_t>(array);
+            })
         .def_prop_ro("dtype", &dtype_of)
         .def_prop_ro("shape",
                      [](const PyTensor& t) {

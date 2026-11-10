@@ -46,5 +46,11 @@ class DataLoader:
 
     def __iter__(self):
         self.reset()
+        get_batch = getattr(self.dataset, "get_batch", None)
         for batch_index in range(len(self)):
-            yield _collate(self.batch(batch_index))
+            if get_batch is not None:
+                begin = batch_index * self.batch_size
+                end = min(begin + self.batch_size, len(self.indices))
+                yield get_batch(self.indices[begin:end])
+            else:
+                yield _collate(self.batch(batch_index))

@@ -36,6 +36,20 @@ namespace detail {
  */
 template <typename dtype, typename Op>
 Tensor<dtype> binary_broadcast(const Tensor<dtype>& lhs, const Tensor<dtype>& rhs, Op op) {
+    if (lhs.ndim() == rhs.ndim() &&
+        std::equal(lhs.shape().begin(), lhs.shape().end(), rhs.shape().begin()) &&
+        lhs.is_contiguous() && rhs.is_contiguous()) {
+        auto result = Tensor<dtype>::uninitialized(lhs.shape());
+        const dtype* lhs_data = lhs.data();
+        const dtype* rhs_data = rhs.data();
+        dtype* result_data = result.data();
+        const size_t count = lhs.numel();
+        for (size_t i = 0; i < count; ++i) {
+            result_data[i] = op(lhs_data[i], rhs_data[i]);
+        }
+        return result;
+    }
+
     const size_t ndim = std::max(lhs.ndim(), rhs.ndim());
     boost::container::small_vector<size_t, 4> shape(ndim, 1);
 
@@ -183,6 +197,151 @@ inline void unbatched_matmul(const dtype* pa, const dtype* pb, dtype* pc, size_t
 #else
     unbatched_NO_cblas_matmul(pa, pb, pc, M, K, N);
 #endif
+}
+
+template <typename dtype>
+inline void unbatched_NO_cblas_matmul_transposed(const dtype* pa, const dtype* pb, dtype* pc,
+                                                 size_t M, size_t K, size_t N, bool trans_a,
+                                                 bool trans_b);
+
+// C = op(A) @ op(B) where op(X) is X or X^T.  The stored matrices are
+// row-major; for CBLAS this means lda = trans_a ? M : K and
+// ldb = trans_b ? K : N.  Used by matmul backward to avoid materialising
+// transposed operands with contiguous()/gather_to().
+template <typename dtype>
+inline void unbatched_matmul_transposed(const dtype* pa, const dtype* pb, dtype* pc, size_t M,
+                                        size_t K, size_t N, bool trans_a, bool trans_b) {
+#if defined(NANOJAX_HAVE_CBLAS)
+    if constexpr (std::is_same_v<dtype, float>) {
+        cblas_sgemm(CblasRowMajor, trans_a ? CblasTrans : CblasNoTrans,
+                    trans_b ? CblasTrans : CblasNoTrans, static_cast<int>(M),
+                    static_cast<int>(N), static_cast<int>(K), 1.0f, pa,
+                    static_cast<int>(trans_a ? M : K), pb,
+                    static_cast<int>(trans_b ? K : N), 0.0f, pc, static_cast<int>(N));
+    } else if constexpr (std::is_same_v<dtype, double>) {
+        cblas_dgemm(CblasRowMajor, trans_a ? CblasTrans : CblasNoTrans,
+                    trans_b ? CblasTrans : CblasNoTrans, static_cast<int>(M),
+                    static_cast<int>(N), static_cast<int>(K), 1.0, pa,
+                    static_cast<int>(trans_a ? M : K), pb,
+                    static_cast<int>(trans_b ? K : N), 0.0, pc, static_cast<int>(N));
+    } else {
+        unbatched_NO_cblas_matmul_transposed(pa, pb, pc, M, K, N, trans_a, trans_b);
+    }
+#else
+    unbatched_NO_cblas_matmul_transposed(pa, pb, pc, M, K, N, trans_a, trans_b);
+#endif
+}
+
+template <typename dtype>
+inline void unbatched_NO_cblas_matmul_transposed(const dtype* pa, const dtype* pb, dtype* pc,
+                                                 size_t M, size_t K, size_t N, bool trans_a,
+                                                 bool trans_b) {
+    const size_t lda = trans_a ? M : K;
+    const size_t ldb = trans_b ? K : N;
+    std::fill_n(pc, M * N, dtype{0});
+    for (size_t i = 0; i < M; ++i) {
+        for (size_t j = 0; j < N; ++j) {
+            dtype acc = dtype{0};
+            for (size_t k = 0; k < K; ++k) {
+                const dtype av = trans_a ? pa[k * lda + i] : pa[i * lda + k];
+                const dtype bv = trans_b ? pb[j * ldb + k] : pb[k * ldb + j];
+                acc += av * bv;
+            }
+            pc[i * N + j] = acc;
+        }
+    }
+}
+
+// A batched, broadcast-aware matmul for transposed operands, used only in the
+// first-order matmul VJP.  Falls back to a contiguous copy for rank-1 or
+// non-contiguous inputs.
+template <typename dtype>
+Tensor<dtype> matmul_transposed(const Tensor<dtype>& lhs, const Tensor<dtype>& rhs,
+                                bool trans_lhs, bool trans_rhs) {
+    if (lhs.ndim() == 0 || rhs.ndim() == 0) {
+        throw std::invalid_argument{"matmul requires operands of rank at least one"};
+    }
+
+    const bool promoted_lhs = lhs.ndim() == 1;
+    const bool promoted_rhs = rhs.ndim() == 1;
+    Tensor<dtype> lhs_p = (promoted_lhs ? lhs.unsqueeze(0) : lhs).contiguous();
+    Tensor<dtype> rhs_p = (promoted_rhs ? rhs.unsqueeze(rhs.ndim()) : rhs).contiguous();
+
+    // Transposing a promoted rank-1 operand is the identity.
+    const bool use_trans_lhs = trans_lhs && !promoted_lhs;
+    const bool use_trans_rhs = trans_rhs && !promoted_rhs;
+
+    const size_t lrank = lhs_p.ndim();
+    const size_t rrank = rhs_p.ndim();
+    const size_t M = use_trans_lhs ? lhs_p.shape()[lrank - 1] : lhs_p.shape()[lrank - 2];
+    const size_t K_lhs =
+        use_trans_lhs ? lhs_p.shape()[lrank - 2] : lhs_p.shape()[lrank - 1];
+    const size_t K_rhs =
+        use_trans_rhs ? rhs_p.shape()[rrank - 1] : rhs_p.shape()[rrank - 2];
+    const size_t N = use_trans_rhs ? rhs_p.shape()[rrank - 2] : rhs_p.shape()[rrank - 1];
+    if (K_lhs != K_rhs) {
+        throw std::invalid_argument{"Invalid dimensions of lhs and rhs for matmul"};
+    }
+
+    auto batch = broadcast_shape(lhs_p.shape().first(lrank - 2), rhs_p.shape().first(rrank - 2));
+    const size_t batch_extent =
+        std::accumulate(batch.begin(), batch.end(), size_t{1}, std::multiplies{});
+
+    auto lhs_shape = concat_shape(batch, lhs_p.shape()[lrank - 2], lhs_p.shape()[lrank - 1]);
+    auto rhs_shape = concat_shape(batch, rhs_p.shape()[rrank - 2], rhs_p.shape()[rrank - 1]);
+    auto out_shape = concat_shape(batch, M, N);
+
+    auto a = lhs_p.detach().broadcast(lhs_shape);
+    auto b = rhs_p.detach().broadcast(rhs_shape);
+    auto c = Tensor<dtype>::uninitialized(out_shape);
+
+    const size_t bndim = batch.size();
+    const auto shape = a.shape();
+    const auto a_stride = a.strides();
+    const auto b_stride = b.strides();
+    const auto c_stride = c.strides();
+    const dtype* a_data = a.data();
+    const dtype* b_data = b.data();
+    dtype* c_data = c.data();
+
+    size_t a_offset = 0;
+    size_t b_offset = 0;
+    size_t c_offset = 0;
+    boost::container::small_vector<size_t, 4> idx(bndim, 0);
+    for (size_t count = batch_extent; count > 0; --count) {
+        unbatched_matmul_transposed(a_data + a_offset, b_data + b_offset, c_data + c_offset, M,
+                                    K_lhs, N, use_trans_lhs, use_trans_rhs);
+
+        for (size_t dim = bndim; dim-- > 0;) {
+            ++idx[dim];
+            a_offset += a_stride[dim];
+            b_offset += b_stride[dim];
+            c_offset += c_stride[dim];
+
+            const size_t extent = shape[dim];
+            if (idx[dim] < extent) {
+                break;
+            }
+
+            idx[dim] = 0;
+            a_offset -= a_stride[dim] * extent;
+            b_offset -= b_stride[dim] * extent;
+            c_offset -= c_stride[dim] * extent;
+        }
+    }
+
+    if (!promoted_lhs && !promoted_rhs) {
+        return c;
+    }
+
+    boost::container::small_vector<size_t, 4> final_shape(out_shape.begin(), out_shape.end());
+    if (promoted_lhs) {
+        final_shape.erase(final_shape.end() - 2);
+    }
+    if (promoted_rhs) {
+        final_shape.pop_back();
+    }
+    return c.reshape(final_shape);
 }
 
 } // namespace detail

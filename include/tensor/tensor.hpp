@@ -2,6 +2,7 @@
 
 #include <boost/container/small_vector.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <format>
@@ -193,6 +194,19 @@ class Tensor {
         if (is_tracked()) {
             throw std::logic_error{"in-place operation on a tracked Tensor"};
         }
+
+        if (ndim() == other.ndim() &&
+            std::equal(shape().begin(), shape().end(), other.shape().begin()) && is_contiguous() &&
+            other.is_contiguous()) {
+            dtype* lhs_data = data();
+            const dtype* rhs_data = other.data();
+            const size_t count = numel();
+            for (size_t i = 0; i < count; ++i) {
+                lhs_data[i] = op(lhs_data[i], rhs_data[i]);
+            }
+            return *this;
+        }
+
         auto other_view = other.detach().broadcast(shape_);
         const auto other_stride = other_view.strides();
         const dtype* src = other_view.data();

@@ -8,6 +8,12 @@
 #include "tensor/tensor.hpp"
 
 namespace nanojax {
+namespace detail {
+template <typename dtype>
+Tensor<dtype> matmul_transposed(const Tensor<dtype>& lhs, const Tensor<dtype>& rhs, bool trans_lhs,
+                                bool trans_rhs);
+}
+
 namespace vjp {
 
 template <typename dtype> Tensor<dtype> track(const Tensor<dtype>& x) {
@@ -24,6 +30,29 @@ template <typename dtype, typename Fn> void record(Tensor<dtype>& result, Fn fn)
         t->backwards(result) = fn;
     }
 }
+
+template <typename dtype>
+void accumulate(Tensor<dtype>& adj, const Tensor<dtype>& current,
+                const Tensor<dtype>& contribution) {
+    if (Trace<dtype>::stack().empty()) {
+        Tensor<dtype> view = adj.detach();
+        view += contribution;
+    } else {
+        adj = current + contribution;
+    }
+}
+
+template <typename dtype>
+void accumulate_sub(Tensor<dtype>& adj, const Tensor<dtype>& current,
+                    const Tensor<dtype>& contribution) {
+    if (Trace<dtype>::stack().empty()) {
+        Tensor<dtype> view = adj.detach();
+        view -= contribution;
+    } else {
+        adj = current - contribution;
+    }
+}
+
 namespace detail {
 template <typename dtype>
 Tensor<dtype> unbroadcast(const Tensor<dtype>& out, std::span<const size_t> target) {
@@ -54,9 +83,9 @@ void add(const Tensor<dtype>& a, const Tensor<dtype>& b, Tensor<dtype>& c) {
     record(c, [a2, b2](Trace<dtype>* tr, size_t self_id) {
         Tensor<dtype> tmp1 = track(tr->adjoint(self_id));
         Tensor<dtype> tmp2 = track(tr->adjoint(a2));
-        tr->adjoint(a2) = tmp2 + detail::unbroadcast(tmp1, a2.shape());
+        accumulate(tr->adjoint(a2), tmp2, detail::unbroadcast(tmp1, a2.shape()));
         tmp2 = track(tr->adjoint(b2));
-        tr->adjoint(b2) = tmp2 + detail::unbroadcast(tmp1, b2.shape());
+        accumulate(tr->adjoint(b2), tmp2, detail::unbroadcast(tmp1, b2.shape()));
     });
 }
 
@@ -71,9 +100,9 @@ void sub(const Tensor<dtype>& a, const Tensor<dtype>& b, Tensor<dtype>& c) {
     record(c, [a2, b2](Trace<dtype>* tr, size_t self_id) {
         Tensor<dtype> tmp1 = track(tr->adjoint(self_id));
         Tensor<dtype> tmp2 = track(tr->adjoint(a2));
-        tr->adjoint(a2) = tmp2 + detail::unbroadcast(tmp1, a2.shape());
+        accumulate(tr->adjoint(a2), tmp2, detail::unbroadcast(tmp1, a2.shape()));
         tmp2 = track(tr->adjoint(b2));
-        tr->adjoint(b2) = tmp2 - detail::unbroadcast(tmp1, b2.shape());
+        accumulate_sub(tr->adjoint(b2), tmp2, detail::unbroadcast(tmp1, b2.shape()));
     });
 }
 
@@ -88,9 +117,9 @@ void mul(const Tensor<dtype>& a, const Tensor<dtype>& b, Tensor<dtype>& c) {
     record(c, [a2, b2](Trace<dtype>* tr, size_t self_id) {
         Tensor<dtype> tmp1 = track(tr->adjoint(self_id));
         Tensor<dtype> tmp2 = track(tr->adjoint(a2));
-        tr->adjoint(a2) = tmp2 + detail::unbroadcast(tmp1 * b2, a2.shape());
+        accumulate(tr->adjoint(a2), tmp2, detail::unbroadcast(tmp1 * b2, a2.shape()));
         tmp2 = track(tr->adjoint(b2));
-        tr->adjoint(b2) = tmp2 + detail::unbroadcast(tmp1 * a2, b2.shape());
+        accumulate(tr->adjoint(b2), tmp2, detail::unbroadcast(tmp1 * a2, b2.shape()));
     });
 }
 
@@ -105,9 +134,10 @@ void div(const Tensor<dtype>& a, const Tensor<dtype>& b, Tensor<dtype>& c) {
     record(c, [a2, b2](Trace<dtype>* tr, size_t self_id) {
         Tensor<dtype> tmp1 = track(tr->adjoint(self_id));
         Tensor<dtype> tmp2 = track(tr->adjoint(a2));
-        tr->adjoint(a2) = tmp2 + detail::unbroadcast(tmp1 / b2, a2.shape());
+        accumulate(tr->adjoint(a2), tmp2, detail::unbroadcast(tmp1 / b2, a2.shape()));
         tmp2 = track(tr->adjoint(b2));
-        tr->adjoint(b2) = tmp2 - detail::unbroadcast(tmp1 * a2 / (b2 * b2), b2.shape());
+        accumulate_sub(tr->adjoint(b2), tmp2,
+                       detail::unbroadcast(tmp1 * a2 / (b2 * b2), b2.shape()));
     });
 }
 
@@ -120,7 +150,7 @@ template <typename dtype> void neg(const Tensor<dtype>& a, Tensor<dtype>& b) {
     record(b, [a2](Trace<dtype>* tr, size_t self_id) {
         Tensor<dtype> tmp1 = track(tr->adjoint(self_id));
         Tensor<dtype> tmp2 = track(tr->adjoint(a2));
-        tr->adjoint(a2) = tmp2 - tmp1;
+        accumulate_sub(tr->adjoint(a2), tmp2, tmp1);
     });
 }
 
@@ -133,7 +163,7 @@ template <typename dtype> void scalar_add(const Tensor<dtype>& a, Tensor<dtype>&
     record(b, [a2](Trace<dtype>* tr, size_t self_id) {
         Tensor<dtype> tmp1 = track(tr->adjoint(self_id));
         Tensor<dtype> tmp2 = track(tr->adjoint(a2));
-        tr->adjoint(a2) = tmp2 + tmp1;
+        accumulate(tr->adjoint(a2), tmp2, tmp1);
     });
 }
 
@@ -146,7 +176,7 @@ template <typename dtype> void lhs_scalar_sub(const Tensor<dtype>& a, Tensor<dty
     record(b, [a2](Trace<dtype>* tr, size_t self_id) {
         Tensor<dtype> tmp1 = track(tr->adjoint(self_id));
         Tensor<dtype> tmp2 = track(tr->adjoint(a2));
-        tr->adjoint(a2) = tmp2 + tmp1;
+        accumulate(tr->adjoint(a2), tmp2, tmp1);
     });
 }
 
@@ -159,7 +189,7 @@ template <typename dtype> void rhs_scalar_sub(const Tensor<dtype>& a, Tensor<dty
     record(b, [a2](Trace<dtype>* tr, size_t self_id) {
         Tensor<dtype> tmp1 = track(tr->adjoint(self_id));
         Tensor<dtype> tmp2 = track(tr->adjoint(a2));
-        tr->adjoint(a2) = tmp2 - tmp1;
+        accumulate_sub(tr->adjoint(a2), tmp2, tmp1);
     });
 }
 
@@ -172,7 +202,7 @@ template <typename dtype> void scalar_mul(const Tensor<dtype>& a, dtype b, Tenso
     record(c, [a2, b](Trace<dtype>* tr, size_t self_id) {
         Tensor<dtype> tmp1 = track(tr->adjoint(self_id));
         Tensor<dtype> tmp2 = track(tr->adjoint(a2));
-        tr->adjoint(a2) = tmp2 + tmp1 * b;
+        accumulate(tr->adjoint(a2), tmp2, tmp1 * b);
     });
 }
 
@@ -185,7 +215,7 @@ template <typename dtype> void lhs_scalar_div(const Tensor<dtype>& a, dtype b, T
     record(c, [a2, b](Trace<dtype>* tr, size_t self_id) {
         Tensor<dtype> tmp1 = track(tr->adjoint(self_id));
         Tensor<dtype> tmp2 = track(tr->adjoint(a2));
-        tr->adjoint(a2) = tmp2 + tmp1 / b;
+        accumulate(tr->adjoint(a2), tmp2, tmp1 / b);
     });
 }
 
@@ -198,7 +228,7 @@ template <typename dtype> void rhs_scalar_div(dtype a, const Tensor<dtype>& b, T
     record(c, [b2, a](Trace<dtype>* tr, size_t self_id) {
         Tensor<dtype> tmp1 = track(tr->adjoint(self_id));
         Tensor<dtype> tmp2 = track(tr->adjoint(b2));
-        tr->adjoint(b2) = tmp2 - tmp1 * a / (b2 * b2);
+        accumulate_sub(tr->adjoint(b2), tmp2, tmp1 * a / (b2 * b2));
     });
 }
 
@@ -211,7 +241,7 @@ template <typename dtype> void exp(const Tensor<dtype>& a, Tensor<dtype>& c) {
     record(c, [a2](Trace<dtype>* tr, size_t self_id) {
         Tensor<dtype> tmp1 = track(tr->adjoint(self_id));
         Tensor<dtype> tmp2 = track(tr->adjoint(a2));
-        tr->adjoint(a2) = tmp2 + tmp1 * exp(a2);
+        accumulate(tr->adjoint(a2), tmp2, tmp1 * exp(a2));
     });
 }
 
@@ -224,7 +254,7 @@ template <typename dtype> void log(const Tensor<dtype>& a, Tensor<dtype>& c) {
     record(c, [a2](Trace<dtype>* tr, size_t self_id) {
         Tensor<dtype> tmp1 = track(tr->adjoint(self_id));
         Tensor<dtype> tmp2 = track(tr->adjoint(a2));
-        tr->adjoint(a2) = tmp2 + tmp1 / a2;
+        accumulate(tr->adjoint(a2), tmp2, tmp1 / a2);
     });
 }
 
@@ -237,7 +267,7 @@ template <typename dtype> void sqrt(const Tensor<dtype>& a, Tensor<dtype>& c) {
     record(c, [a2](Trace<dtype>* tr, size_t self_id) {
         Tensor<dtype> tmp1 = track(tr->adjoint(self_id));
         Tensor<dtype> tmp2 = track(tr->adjoint(a2));
-        tr->adjoint(a2) = tmp2 + tmp1 / (sqrt(a2) * dtype{2});
+        accumulate(tr->adjoint(a2), tmp2, tmp1 / (sqrt(a2) * dtype{2}));
     });
 }
 
@@ -250,7 +280,7 @@ template <typename dtype> void pow(const Tensor<dtype>& a, dtype exponent, Tenso
     record(c, [a2, exponent](Trace<dtype>* tr, size_t self_id) {
         Tensor<dtype> tmp1 = track(tr->adjoint(self_id));
         Tensor<dtype> tmp2 = track(tr->adjoint(a2));
-        tr->adjoint(a2) = tmp2 + (tmp1 * exponent) * pow(a2, exponent - dtype{1});
+        accumulate(tr->adjoint(a2), tmp2, (tmp1 * exponent) * pow(a2, exponent - dtype{1}));
     });
 }
 
@@ -266,7 +296,7 @@ template <typename dtype> void abs(const Tensor<dtype>& a, Tensor<dtype>& c) {
         auto sign = a2.detach().map([](dtype element) {
             return element > dtype{0} ? dtype{1} : (element < dtype{0} ? dtype{-1} : dtype{0});
         });
-        tr->adjoint(a2) = tmp2 + tmp1 * sign;
+        accumulate(tr->adjoint(a2), tmp2, tmp1 * sign);
     });
 }
 
@@ -281,7 +311,7 @@ template <typename dtype> void relu(const Tensor<dtype>& a, Tensor<dtype>& c) {
         Tensor<dtype> tmp2 = track(tr->adjoint(a2));
         auto mask =
             a2.detach().map([](dtype element) { return element > dtype{0} ? dtype{1} : dtype{0}; });
-        tr->adjoint(a2) = tmp2 + tmp1 * mask;
+        accumulate(tr->adjoint(a2), tmp2, tmp1 * mask);
     });
 }
 
@@ -295,7 +325,7 @@ template <typename dtype> void sigmoid(const Tensor<dtype>& a, Tensor<dtype>& c)
         Tensor<dtype> tmp1 = track(tr->adjoint(self_id));
         Tensor<dtype> tmp2 = track(tr->adjoint(a2));
         Tensor<dtype> y = sigmoid(a2);
-        tr->adjoint(a2) = tmp2 + tmp1 * y * (dtype{1} - y);
+        accumulate(tr->adjoint(a2), tmp2, tmp1 * y * (dtype{1} - y));
     });
 }
 
@@ -309,7 +339,7 @@ template <typename dtype> void tanh(const Tensor<dtype>& a, Tensor<dtype>& c) {
         Tensor<dtype> tmp1 = track(tr->adjoint(self_id));
         Tensor<dtype> tmp2 = track(tr->adjoint(a2));
         Tensor<dtype> y = tanh(a2);
-        tr->adjoint(a2) = tmp2 + tmp1 * (dtype{1} - y * y);
+        accumulate(tr->adjoint(a2), tmp2, tmp1 * (dtype{1} - y * y));
     });
 }
 
@@ -322,7 +352,7 @@ template <typename dtype> void sum(const Tensor<dtype>& a, Tensor<dtype>& b) {
     record(b, [a2](Trace<dtype>* tr, size_t self_id) {
         Tensor<dtype> tmp1 = track(tr->adjoint(self_id));
         Tensor<dtype> tmp2 = track(tr->adjoint(a2));
-        tr->adjoint(a2) = tmp2 + tmp1.broadcast(a2.shape());
+        accumulate(tr->adjoint(a2), tmp2, tmp1.broadcast(a2.shape()));
     });
 }
 
@@ -335,7 +365,7 @@ template <typename dtype> void sum(const Tensor<dtype>& a, size_t axis, Tensor<d
     record(b, [a2, axis](Trace<dtype>* tr, size_t self_id) {
         Tensor<dtype> tmp1 = track(tr->adjoint(self_id));
         Tensor<dtype> tmp2 = track(tr->adjoint(a2));
-        tr->adjoint(a2) = tmp2 + tmp1.unsqueeze(axis).broadcast(a2.shape());
+        accumulate(tr->adjoint(a2), tmp2, tmp1.unsqueeze(axis).broadcast(a2.shape()));
     });
 }
 
@@ -350,7 +380,7 @@ template <typename dtype> void max(const Tensor<dtype>& a, size_t flat_idx, Tens
         Tensor<dtype> tmp2 = track(tr->adjoint(a2));
         Tensor<dtype> onehot = Tensor<dtype>::zeros_like(a2);
         onehot.data()[flat_idx] = dtype{1};
-        tr->adjoint(a2) = tmp2 + tmp1 * onehot;
+        accumulate(tr->adjoint(a2), tmp2, tmp1 * onehot);
     });
 }
 
@@ -365,7 +395,7 @@ template <typename dtype> void min(const Tensor<dtype>& a, size_t flat_idx, Tens
         Tensor<dtype> tmp2 = track(tr->adjoint(a2));
         Tensor<dtype> onehot = Tensor<dtype>::zeros_like(a2);
         onehot.data()[flat_idx] = dtype{1};
-        tr->adjoint(a2) = tmp2 + tmp1 * onehot;
+        accumulate(tr->adjoint(a2), tmp2, tmp1 * onehot);
     });
 }
 
@@ -378,7 +408,7 @@ template <typename dtype> void reshape(const Tensor<dtype>& a, Tensor<dtype>& re
     record(result, [a2](Trace<dtype>* tr, size_t self_id) {
         Tensor<dtype> tmp1 = track(tr->adjoint(self_id));
         Tensor<dtype> tmp2 = track(tr->adjoint(a2));
-        tr->adjoint(a2) = tmp2 + tmp1.reshape(a2.shape());
+        accumulate(tr->adjoint(a2), tmp2, tmp1.reshape(a2.shape()));
     });
 }
 
@@ -391,7 +421,7 @@ template <typename dtype> void transpose(const Tensor<dtype>& a, Tensor<dtype>& 
     record(result, [a2](Trace<dtype>* tr, size_t self_id) {
         Tensor<dtype> tmp1 = track(tr->adjoint(self_id));
         Tensor<dtype> tmp2 = track(tr->adjoint(a2));
-        tr->adjoint(a2) = tmp2 + tmp1.transpose();
+        accumulate(tr->adjoint(a2), tmp2, tmp1.transpose());
     });
 }
 
@@ -410,7 +440,7 @@ void permute(const Tensor<dtype>& a, Tensor<dtype>& result, std::span<const size
     record(result, [a2, inverse](Trace<dtype>* tr, size_t self_id) {
         Tensor<dtype> tmp1 = track(tr->adjoint(self_id));
         Tensor<dtype> tmp2 = track(tr->adjoint(a2));
-        tr->adjoint(a2) = tmp2 + tmp1.permute(std::span<const size_t>(inverse));
+        accumulate(tr->adjoint(a2), tmp2, tmp1.permute(std::span<const size_t>(inverse)));
     });
 }
 
@@ -423,7 +453,7 @@ template <typename dtype> void squeeze(const Tensor<dtype>& a, Tensor<dtype>& re
     record(result, [a2](Trace<dtype>* tr, size_t self_id) {
         Tensor<dtype> tmp1 = track(tr->adjoint(self_id));
         Tensor<dtype> tmp2 = track(tr->adjoint(a2));
-        tr->adjoint(a2) = tmp2 + tmp1.reshape(a2.shape());
+        accumulate(tr->adjoint(a2), tmp2, tmp1.reshape(a2.shape()));
     });
 }
 
@@ -436,7 +466,7 @@ template <typename dtype> void unsqueeze(const Tensor<dtype>& a, Tensor<dtype>& 
     record(result, [a2](Trace<dtype>* tr, size_t self_id) {
         Tensor<dtype> tmp1 = track(tr->adjoint(self_id));
         Tensor<dtype> tmp2 = track(tr->adjoint(a2));
-        tr->adjoint(a2) = tmp2 + tmp1.reshape(a2.shape());
+        accumulate(tr->adjoint(a2), tmp2, tmp1.reshape(a2.shape()));
     });
 }
 
@@ -449,7 +479,7 @@ template <typename dtype> void broadcast(const Tensor<dtype>& a, Tensor<dtype>& 
     record(result, [a2](Trace<dtype>* tr, size_t self_id) {
         Tensor<dtype> tmp1 = track(tr->adjoint(self_id));
         Tensor<dtype> tmp2 = track(tr->adjoint(a2));
-        tr->adjoint(a2) = tmp2 + detail::unbroadcast(tmp1, a2.shape());
+        accumulate(tr->adjoint(a2), tmp2, detail::unbroadcast(tmp1, a2.shape()));
     });
 }
 
@@ -491,13 +521,23 @@ void matmul(const Tensor<dtype>& a, const Tensor<dtype>& b, Tensor<dtype>& c) {
     record(c, [a2, b2](Trace<dtype>* tr, size_t self_id) {
         Tensor<dtype> tmp1 = track(tr->adjoint(self_id));
         Tensor<dtype> tmp2 = track(tr->adjoint(a2));
-        tr->adjoint(a2) =
-            tmp2 +
-            detail::unbatch(matmul(tmp1, detail::transpose_last_two(b2.detach())), a2.shape());
-        tmp2 = track(tr->adjoint(b2));
-        tr->adjoint(b2) =
-            tmp2 +
-            detail::unbatch(matmul(detail::transpose_last_two(a2.detach()), tmp1), b2.shape());
+
+        if (Trace<dtype>::stack().empty()) {
+            auto ga = ::nanojax::detail::matmul_transposed(tmp1, b2, /*trans_lhs=*/false,
+                                                           /*trans_rhs=*/true);
+            accumulate(tr->adjoint(a2), tmp2, detail::unbatch(ga, a2.shape()));
+
+            tmp2 = track(tr->adjoint(b2));
+            auto gb = ::nanojax::detail::matmul_transposed(a2, tmp1, /*trans_lhs=*/true,
+                                                           /*trans_rhs=*/false);
+            accumulate(tr->adjoint(b2), tmp2, detail::unbatch(gb, b2.shape()));
+        } else {
+            accumulate(tr->adjoint(a2), tmp2,
+                       detail::unbatch(matmul(tmp1, detail::transpose_last_two(b2)), a2.shape()));
+            tmp2 = track(tr->adjoint(b2));
+            accumulate(tr->adjoint(b2), tmp2,
+                       detail::unbatch(matmul(detail::transpose_last_two(a2), tmp1), b2.shape()));
+        }
     });
 }
 
@@ -510,7 +550,7 @@ template <typename dtype> void slice(const Tensor<dtype>& a, Tensor<dtype>& c, s
     record(c, [a2, index](Trace<dtype>* tr, size_t self_id) {
         auto tmp1 = track(tr->adjoint(self_id));
         auto tmp2 = track(tr->adjoint(a2));
-        tr->adjoint(a2) = tmp2 + scatter(tmp1.unsqueeze(0), a2.shape(), 0, index, 1);
+        accumulate(tr->adjoint(a2), tmp2, scatter(tmp1.unsqueeze(0), a2.shape(), 0, index, 1));
     });
 }
 
@@ -525,7 +565,7 @@ void slice(const Tensor<dtype>& a, Tensor<dtype>& c, size_t dim, size_t start, s
     record(c, [a2, dim, start, step](Trace<dtype>* tr, size_t self_id) {
         auto tmp1 = track(tr->adjoint(self_id));
         auto tmp2 = track(tr->adjoint(a2));
-        tr->adjoint(a2) = tmp2 + scatter(tmp1, a2.shape(), dim, start, step);
+        accumulate(tr->adjoint(a2), tmp2, scatter(tmp1, a2.shape(), dim, start, step));
     });
 }
 
@@ -541,7 +581,7 @@ void scatter(const Tensor<dtype>& a, Tensor<dtype>& c, size_t dim, size_t start,
         auto tmp2 = track(tr->adjoint(a2));
         const size_t count = a2.shape()[dim];
         const size_t end = (count == 0) ? start : start + (count - 1) * step + 1;
-        tr->adjoint(a2) = tmp2 + tmp1.slice(dim, start, end, step);
+        accumulate(tr->adjoint(a2), tmp2, tmp1.slice(dim, start, end, step));
     });
 }
 
@@ -556,8 +596,9 @@ void im2col(const Tensor<dtype>& im, Tensor<dtype>& cols, size_t KH, size_t KW, 
     record(cols, [im2, KH, KW, dh, dw, ph, pw, sh, sw](Trace<dtype>* tr, size_t self_id) {
         Tensor<dtype> tmp1 = track(tr->adjoint(self_id));
         Tensor<dtype> tmp2 = track(tr->adjoint(im2));
-        tr->adjoint(im2) = tmp2 + col2im(tmp1, im2.shape()[1], im2.shape()[2], im2.shape()[3], KH,
-                                         KW, dh, dw, ph, pw, sh, sw); // (B, C, H, W)
+        accumulate(tr->adjoint(im2), tmp2,
+                   col2im(tmp1, im2.shape()[1], im2.shape()[2], im2.shape()[3], KH, KW, dh, dw, ph,
+                          pw, sh, sw)); // (B, C, H, W)
     });
 }
 
@@ -572,7 +613,8 @@ void col2im(const Tensor<dtype>& cols, Tensor<dtype>& im, size_t KH, size_t KW, 
     record(im, [a2, KH, KW, dh, dw, ph, pw, sh, sw](Trace<dtype>* tr, size_t self_id) {
         Tensor<dtype> tmp1 = track(tr->adjoint(self_id));
         Tensor<dtype> tmp2 = track(tr->adjoint(a2));
-        tr->adjoint(a2) = tmp2 + im2col(tmp1, KH, KW, dh, dw, ph, pw, sh, sw); // (B, K, L)
+        accumulate(tr->adjoint(a2), tmp2,
+                   im2col(tmp1, KH, KW, dh, dw, ph, pw, sh, sw)); // (B, K, L)
     });
 };
 
